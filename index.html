@@ -1,47 +1,65 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>3D Perspective Pixel Tennis (WebRTC)</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Pixel Tennis Online</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { background-color: #111; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; font-family: sans-serif; overflow: hidden; }
-        canvas { background-color: #1a4f1a; border: 4px solid #fff; box-shadow: 0 15px 40px rgba(0, 0, 0, 0.9); }
-        .container { text-align: center; }
+        body {
+            background-color: #111;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+        }
+        canvas {
+            background-color: #1a4f1a;
+            border: 4px solid #fff;
+            box-shadow: 0 0 50px rgba(0,0,0,0.8);
+            image-rendering: pixelated;
+        }
+        .ui-overlay {
+            position: absolute;
+            top: 20px;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
     </style>
 </head>
 <body>
 
-    <div class="container">
-        <h2 id="status">3D Pixel Tennis Online</h2>
-        <canvas id="gameCanvas" width="1000" height="800"></canvas>
-    </div>
+    <div class="ui-overlay" id="networkStatus">Status: PeerJS Loading...</div>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
 
     <script>
-        // Use PeerJS from the window global
-        const Peer = window.Peer; 
-
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
-        
-        // --- GAME STATE ---
+        const statusEl = document.getElementById('networkStatus');
+
+        // --- APP STATE ---
         let appState = "MENU"; 
         let peer = null;
         let conn = null;
         let isHost = false;
-        let isClient = false;
         let myRoomId = "";
-        let clientKeys = { left: false, right: false, swing: false };
+        
+        // --- GAME DATA ---
+        let ball = { x: 400, y: 300, radius: 10 };
+        let players = [
+            { x: 350, y: 550, w: 100, h: 15, color: '#0077ff', score: 0 }, // Bottom (Host)
+            { x: 350, y: 35, w: 100, h: 15, color: '#ff3300', score: 0 }    // Top (Client)
+        ];
+        let keys = {};
+        let clientInputs = { left: false, right: false };
 
-        // Physics/Ball/Players (Condensed for brevity, same logic as before)
-        let ballX = 500, ballY = 400, ballZ = 0, ballZV = 0;
-        let ballSX = 0, ballSY = 0;
-        let p1Points = 0, p2Points = 0;
-        let gameState = 0; // 0: Serve, 1: Play
-        let players = [];
-        const keys = {};
-
-        // --- INPUTS ---
+        // Listen for keys
         window.addEventListener("keydown", e => {
             keys[e.code] = true;
             if (appState === "MENU") {
@@ -51,114 +69,135 @@
         });
         window.addEventListener("keyup", e => keys[e.code] = false);
 
-        // --- NETWORKING ---
+        // --- PEERJS LOGIC ---
+        function initPeerStatus() {
+            if (window.Peer) {
+                statusEl.innerText = "Status: Ready to Play";
+            } else {
+                setTimeout(initPeerStatus, 500);
+            }
+        }
+        initPeerStatus();
+
         function startHosting() {
+            if (!window.Peer) return alert("PeerJS not loaded yet!");
+            
             appState = "HOSTING";
-            isHost = true;
             myRoomId = Math.random().toString(36).substring(2, 6).toUpperCase();
+            peer = new window.Peer("tennis-" + myRoomId);
             
-            // Create Peer with a specific ID
-            peer = new Peer("tennis-" + myRoomId);
-            
-            peer.on('open', id => console.log("Room Created: " + myRoomId));
+            peer.on('open', id => {
+                statusEl.innerText = "Hosting Room: " + myRoomId;
+            });
+
             peer.on('connection', connection => {
                 conn = connection;
                 conn.on('open', () => {
                     appState = "PLAY";
-                    setupPlayers();
-                    // Listen for client keys
-                    conn.on('data', data => { if(data.type === 'keys') clientKeys = data.keys; });
-                });
-            });
-            peer.on('error', err => {
-                alert("ID Taken or Connection Error. Try refreshing.");
-                console.error(err);
-            });
-        }
-
-        function joinGame() {
-            let code = prompt("Enter 4-letter Code:");
-            if(!code) return;
-            isClient = true;
-            appState = "CONNECTING";
-            peer = new Peer(); // Client gets a random ID
-            
-            peer.on('open', () => {
-                conn = peer.connect("tennis-" + code.toUpperCase());
-                conn.on('open', () => {
-                    appState = "PLAY";
-                    setupPlayers();
-                    // Listen for host sync
+                    isHost = true;
+                    // Listen for Client movement
                     conn.on('data', data => {
-                        if(data.type === 'sync') syncFromServer(data.state);
+                        if (data.type === 'input') clientInputs = data.inputs;
                     });
                 });
             });
         }
 
-        function setupPlayers() {
-            players = [
-                { x: 450, y: 650, color: 'blue', isBottom: true },
-                { x: 450, y: 150, color: 'red', isBottom: false }
-            ];
+        function joinGame() {
+            if (!window.Peer) return alert("PeerJS not loaded yet!");
+            
+            let code = prompt("Enter 4-letter Room Code:").toUpperCase();
+            if (!code) return;
+
+            appState = "CONNECTING";
+            peer = new window.Peer(); // Client gets random ID
+            
+            peer.on('open', () => {
+                conn = peer.connect("tennis-" + code);
+                conn.on('open', () => {
+                    appState = "PLAY";
+                    isHost = false;
+                    statusEl.innerText = "Connected to Host";
+                    // Listen for Host sync
+                    conn.on('data', data => {
+                        if (data.type === 'sync') {
+                            ball = data.ball;
+                            players = data.players;
+                        }
+                    });
+                });
+            });
         }
 
-        function syncFromServer(s) {
-            ballX = s.bx; ballY = s.by; ballZ = s.bz;
-            players[0].x = s.p1x; players[1].x = s.p2x;
-        }
-
-        // --- CORE LOOP ---
+        // --- GAME LOOP ---
         function update() {
-            if (appState === "PLAY") {
+            ctx.fillStyle = '#1a4f1a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (appState === "MENU") {
+                drawText("PIXEL TENNIS ONLINE", 400, 250, "40px", "white");
+                drawText("PRESS [3] TO HOST", 400, 320, "20px", "#00ff00");
+                drawText("PRESS [4] TO JOIN", 400, 360, "20px", "#ff00ff");
+            } 
+            else if (appState === "HOSTING") {
+                drawText("WAITING FOR PLAYER 2...", 400, 280, "25px", "white");
+                drawText("ROOM CODE: " + myRoomId, 400, 330, "35px", "yellow");
+            }
+            else if (appState === "CONNECTING") {
+                drawText("CONNECTING TO HOST...", 400, 300, "25px", "white");
+            }
+            else if (appState === "PLAY") {
                 if (isHost) {
-                    // Move Player 1 (Local)
-                    if(keys['KeyA']) players[0].x -= 7;
-                    if(keys['KeyD']) players[0].x += 7;
-                    // Move Player 2 (From Client Keys)
-                    if(clientKeys.left) players[1].x -= 7;
-                    if(clientKeys.right) players[1].x += 7;
+                    // Logic for Host
+                    if (keys['ArrowLeft'] || keys['KeyA']) players[0].x -= 7;
+                    if (keys['ArrowRight'] || keys['KeyD']) players[0].x += 7;
+                    
+                    // Logic for Client (received via data)
+                    if (clientInputs.left) players[1].x -= 7;
+                    if (clientInputs.right) players[1].x += 7;
 
-                    // Basic Ball Move
-                    if(gameState === 0 && keys['Space']) gameState = 1;
-                    if(gameState === 1) { ballY -= 5; }
+                    // Move Ball
+                    ball.y -= 3;
+                    if (ball.y < 0) ball.y = 600;
 
-                    // Send to client
-                    if(conn && conn.open) {
-                        conn.send({type:'sync', state:{bx:ballX, by:ballY, bz:ballZ, p1x:players[0].x, p2x:players[1].x}});
+                    // Sync to Client
+                    if (conn && conn.open) {
+                        conn.send({ type: 'sync', ball: ball, players: players });
                     }
-                } else if (isClient) {
-                    // Send keys to host
-                    if(conn && conn.open) {
-                        conn.send({type:'keys', keys:{
-                            left: keys['ArrowLeft'] || keys['KeyA'],
-                            right: keys['ArrowRight'] || keys['KeyD'],
-                            swing: keys['Space']
-                        }});
+                } else {
+                    // Client sends inputs to Host
+                    if (conn && conn.open) {
+                        conn.send({ 
+                            type: 'input', 
+                            inputs: { 
+                                left: keys['ArrowLeft'] || keys['KeyA'], 
+                                right: keys['ArrowRight'] || keys['KeyD'] 
+                            } 
+                        });
                     }
                 }
+
+                // Draw Ball
+                ctx.fillStyle = 'yellow';
+                ctx.beginPath();
+                ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Draw Players
+                players.forEach(p => {
+                    ctx.fillStyle = p.color;
+                    ctx.fillRect(p.x, p.y, p.w, p.h);
+                });
             }
-            draw();
+
             requestAnimationFrame(update);
         }
 
-        function draw() {
-            ctx.fillStyle = '#1a4f1a';
-            ctx.fillRect(0,0,1000,800);
-            
-            if (appState === "MENU") {
-                ctx.fillStyle = "white"; ctx.textAlign = "center"; ctx.font = "30px Arial";
-                ctx.fillText("Press 3 to HOST | Press 4 to JOIN", 500, 400);
-            } else if (appState === "HOSTING") {
-                ctx.fillText("ROOM CODE: " + myRoomId, 500, 400);
-            } else if (appState === "PLAY") {
-                players.forEach(p => {
-                    ctx.fillStyle = p.color;
-                    ctx.fillRect(p.x, p.y, 100, 20);
-                });
-                ctx.fillStyle = "yellow";
-                ctx.beginPath(); ctx.arc(ballX, ballY, 10, 0, Math.PI*2); ctx.fill();
-            }
+        function drawText(txt, x, y, size, color) {
+            ctx.fillStyle = color;
+            ctx.font = size + " 'Courier New'";
+            ctx.textAlign = "center";
+            ctx.fillText(txt, x, y);
         }
 
         update();
