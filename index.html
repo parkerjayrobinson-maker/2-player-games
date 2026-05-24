@@ -54,7 +54,7 @@
         let isHost = false;
         let isClient = false;
         let myRoomId = "Generating...";
-        let clientKeys = { left: false, right: false, swing: false }; 
+        let clientKeys = { left: false, right: false, up: false, down: false, swing: false }; 
 
         // Game Variables
         let p1Points = 0; let p2Points = 0;
@@ -83,14 +83,13 @@
             if(["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
 
             if (appState === "MENU") {
-                if (e.code === "Digit1") startGame(1); // Local PvP
-                if (e.code === "Digit2") startGame(3); // CPU
-                if (e.code === "Digit3") startHosting(); // WebRTC Host
-                if (e.code === "Digit4") joinGame(); // WebRTC Join
+                if (e.code === "Digit1") startGame(1); 
+                if (e.code === "Digit2") startGame(3); 
+                if (e.code === "Digit3") startHosting(); 
+                if (e.code === "Digit4") joinGame(); 
                 return;
             }
 
-            // In online Client mode, trigger local animation immediately for responsive feel
             if (isClient && e.code === 'Space') {
                 if (players[1] && players[1].swingTimer === 0) players[1].swingTimer = SWING_DURATION;
             }
@@ -110,13 +109,12 @@
             keys[e.code] = false;
         });
 
-        // --- WEBRTC NETWORKING LOGIC ---
+        // --- WEBRTC NETWORKING ---
 
         function startHosting() {
             appState = "HOSTING";
             isHost = true;
             isClient = false;
-            
             let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
             let shortId = "";
             for(let i=0; i<4; i++) shortId += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -129,13 +127,13 @@
                     conn.on('data', (data) => {
                         if (data.type === 'keys') clientKeys = data.keys; 
                     });
-                    startGame(4); // Start Online Match
+                    startGame(4);
                 });
             });
         }
 
         function joinGame() {
-            let roomCode = prompt("Enter the 4-letter Room Code:");
+            let roomCode = prompt("Enter the 4-letter Room Code from the Host:");
             if (!roomCode) return;
             appState = "CONNECTING";
             isClient = true;
@@ -146,8 +144,8 @@
                 conn.on('data', (data) => {
                     if (data.type === 'sync') {
                         ballX = data.state.bX; ballY = data.state.bY; ballZ = data.state.bZ;
-                        players[0].x = data.state.p1X; players[0].swingTimer = data.state.p1S;
-                        players[1].x = data.state.p2X; 
+                        players[0].x = data.state.p1X; players[0].y = data.state.p1Y; players[0].swingTimer = data.state.p1S;
+                        players[1].x = data.state.p2X; players[1].y = data.state.p2Y;
                         if (!players[1].swingTimer) players[1].swingTimer = data.state.p2S; 
                         p1Points = data.state.s1; p2Points = data.state.s2;
                         p1Games = data.state.g1; p2Games = data.state.g2;
@@ -164,8 +162,8 @@
                     type: 'sync',
                     state: {
                         bX: ballX, bY: ballY, bZ: ballZ,
-                        p1X: players[0].x, p1S: players[0].swingTimer,
-                        p2X: players[1].x, p2S: players[1].swingTimer,
+                        p1X: players[0].x, p1Y: players[0].y, p1S: players[0].swingTimer,
+                        p2X: players[1].x, p2Y: players[1].y, p2S: players[1].swingTimer,
                         s1: p1Points, s2: p2Points, g1: p1Games, g2: p2Games,
                         gs: gameState, sv: server, msg: alertMessage, msgT: alertTimer
                     }
@@ -180,6 +178,8 @@
                     keys: { 
                         left: keys['KeyA'] || keys['ArrowLeft'], 
                         right: keys['KeyD'] || keys['ArrowRight'], 
+                        up: keys['KeyW'] || keys['ArrowUp'],
+                        down: keys['KeyS'] || keys['ArrowDown'],
                         swing: keys['Space'] || keys['Enter'] 
                     }
                 });
@@ -203,26 +203,26 @@
             players.push({
                 id: 1, team: 1, canServe: true, x: canvas.width / 2 - PADDLE_WIDTH / 2, y: canvas.height - MARGIN_Y - PADDLE_HEIGHT - 20,
                 color: '#1e90ff', isBottom: true, swingTimer: 0, isAI: false,
-                controls: { left: 'KeyA', right: 'KeyD', swing: 'Space' } 
+                controls: { left: 'KeyA', right: 'KeyD', up: 'KeyW', down: 'KeyS', swing: 'Space' } 
             });
 
-            if (gameMode === 1) { // Local PvP
+            if (gameMode === 1) {
                 players.push({
                     id: 2, team: 2, canServe: true, x: canvas.width / 2 - PADDLE_WIDTH / 2, y: MARGIN_Y + 20,
                     color: '#ff4500', isBottom: false, swingTimer: 0, isAI: false,
-                    controls: { left: 'ArrowLeft', right: 'ArrowRight', swing: 'Enter' }
+                    controls: { left: 'ArrowLeft', right: 'ArrowRight', up: 'ArrowUp', down: 'ArrowDown', swing: 'Enter' }
                 });
-            } else if (gameMode === 3) { // AI
+            } else if (gameMode === 3) {
                 players.push({
                     id: 2, team: 2, canServe: true, x: canvas.width / 2 - PADDLE_WIDTH / 2, y: MARGIN_Y + 20,
                     color: '#8b0000', isBottom: false, swingTimer: 0, isAI: true, aiTimer: 0, aiSwingDelay: 0,
                     controls: {} 
                 });
-            } else { // Online (Host/Client)
+            } else {
                 players.push({
                     id: 2, team: 2, canServe: true, x: canvas.width / 2 - PADDLE_WIDTH / 2, y: MARGIN_Y + 20,
                     color: '#ff4500', isBottom: false, swingTimer: 0, isAI: false,
-                    controls: { left: 'RemoteLeft', right: 'RemoteRight', swing: 'RemoteSwing' } 
+                    controls: { left: 'RemoteLeft', right: 'RemoteRight', up: 'RemoteUp', down: 'RemoteDown', swing: 'RemoteSwing' } 
                 });
             }
         }
@@ -242,6 +242,10 @@
             if (isClient) return;
             gameState = 0; rallies = 0; ballSpeedX = 0; ballSpeedY = 0; ballZ = 0;
             if (faults === 0) showAlert(server === 1 ? "BOTTOM SERVES" : "TOP SERVES");
+            
+            // Return to baseline
+            players[0].y = canvas.height - MARGIN_Y - PADDLE_HEIGHT - 20;
+            players[1].y = MARGIN_Y + 20;
         }
 
         function handleFault() {
@@ -281,7 +285,6 @@
                 if (p.swingTimer > 0) p.swingTimer--;
 
                 if (p.isAI) {
-                    // Optimized AI logic from previous version
                     if (gameState === 0 && server === p.team && p.canServe) {
                         p.aiTimer++;
                         if (p.aiTimer > 60) { gameState = 1; ballZVelocity = 10; p.aiTimer = 0; p.aiSwingDelay = 25; }
@@ -296,6 +299,7 @@
                         let speed = PADDLE_SPEED * 1.5; 
                         if (ballSpeedY < 0) { 
                             let targetX = ballX - PADDLE_WIDTH / 2;
+                            // AI only tracks horizontally
                             if (p.x < targetX - 2) p.x += speed;
                             if (p.x > targetX + 2) p.x -= speed;
                         } else {
@@ -303,10 +307,22 @@
                             if (p.x < targetX - 5) p.x += speed * 0.5;
                             if (p.x > targetX + 5) p.x -= speed * 0.5;
                         }
+                        
+                        // AI restricted to court lines
+                        if (p.x < MARGIN_X) p.x = MARGIN_X;
+                        if (p.x > canvas.width - MARGIN_X - PADDLE_WIDTH) p.x = canvas.width - MARGIN_X - PADDLE_WIDTH;
+                        p.y = MARGIN_Y + 20; // Lock AI vertical position
                     }
                 } else {
-                    let moveLeft = keys[p.controls.left], moveRight = keys[p.controls.right], swing = keys[p.controls.swing];
-                    if (isHost && !p.isBottom) { moveLeft = clientKeys.left; moveRight = clientKeys.right; swing = clientKeys.swing; }
+                    let moveLeft = keys[p.controls.left], moveRight = keys[p.controls.right],
+                        moveUp = keys[p.controls.up], moveDown = keys[p.controls.down],
+                        swing = keys[p.controls.swing];
+
+                    if (isHost && !p.isBottom) { 
+                        moveLeft = clientKeys.left; moveRight = clientKeys.right; 
+                        moveUp = clientKeys.up; moveDown = clientKeys.down; 
+                        swing = clientKeys.swing; 
+                    }
 
                     if (isHost && !p.isBottom && swing && p.swingTimer === 0) {
                         if (gameState === 0 && server === p.team) { gameState = 1; ballZVelocity = 10; }
@@ -314,8 +330,19 @@
                     }
 
                     if (gameState > 0) {
-                        if (moveLeft && p.x > MARGIN_X) p.x -= PADDLE_SPEED;
-                        if (moveRight && p.x < canvas.width - MARGIN_X - PADDLE_WIDTH) p.x += PADDLE_SPEED;
+                        if (moveLeft) p.x -= PADDLE_SPEED;
+                        if (moveRight) p.x += PADDLE_SPEED;
+                        
+                        if (p.isBottom) {
+                            if (moveUp && p.y > canvas.height / 2 + 50) p.y -= PADDLE_SPEED * 0.7;
+                            if (moveDown && p.y < canvas.height - 50) p.y += PADDLE_SPEED * 0.7;
+                        } else {
+                            if (moveUp && p.y > 50) p.y -= PADDLE_SPEED * 0.7;
+                            if (moveDown && p.y < canvas.height / 2 - 100) p.y += PADDLE_SPEED * 0.7;
+                        }
+                        
+                        if (p.x < 0) p.x = 0;
+                        if (p.x > canvas.width - PADDLE_WIDTH) p.x = canvas.width - PADDLE_WIDTH;
                     }
                 }
             });
@@ -329,7 +356,9 @@
                 if (ballZ < 0) { ballZ = 0; if (gameState === 1) handleFault(); else ballZVelocity = Math.abs(ballZVelocity) * 0.7; }
                 checkCollisions(gameState === 1);
                 if (gameState === 2) {
-                    if (ballX < MARGIN_X - 20 || ballX > canvas.width - MARGIN_X + 20) scorePoint(lastHitter === 1 ? 2 : 1);
+                    if (ballX < MARGIN_X - 20 || ballX > canvas.width - MARGIN_X + 20) {
+                        if (rallies === 0) handleFault(); else scorePoint(lastHitter === 1 ? 2 : 1);
+                    }
                     else if (ballY < 0) scorePoint(1); else if (ballY > canvas.height) scorePoint(2); 
                 }
             }
@@ -350,7 +379,8 @@
         }
 
         function project(x, y, z = 0) {
-            let pct = y / canvas.height; let scale = 0.35 + (0.65 * pct); 
+            let pct = y / canvas.height; 
+            let scale = 0.35 + (0.65 * pct); 
             let pX = (canvas.width / 2) + (x - (canvas.width / 2)) * scale;
             let pY = canvas.height * (pct * pct * 0.3 + pct * 0.7) - (z * scale);
             return { x: pX, y: pY, scale: scale };
@@ -365,19 +395,41 @@
 
         function drawNet() {
             const midY = canvas.height / 2;
-            let nB_L = project(MARGIN_X - 25, midY, 0); let nB_R = project(canvas.width - MARGIN_X + 25, midY, 0);
-            let nT_L = project(MARGIN_X - 25, midY, 25); let nT_R = project(canvas.width - MARGIN_X + 25, midY, 25);
+            let nB_L = project(0, midY, 0); let nB_R = project(canvas.width, midY, 0);
+            let nT_L = project(0, midY, 25); let nT_R = project(canvas.width, midY, 25);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'; drawPolygon([nB_L, nB_R, project(canvas.width, midY + 10, 0), project(0, midY + 10, 0)], ctx.fillStyle);
             ctx.fillStyle = 'rgba(255, 255, 255, 0.25)'; drawPolygon([nB_L, nB_R, nT_R, nT_L], ctx.fillStyle);
             ctx.strokeStyle = 'white'; ctx.lineWidth = 4 * nT_L.scale;
             ctx.beginPath(); ctx.moveTo(nT_L.x, nT_L.y); ctx.lineTo(nT_R.x, nT_R.y); ctx.stroke();
         }
 
         function drawPixelGuy(p) {
-            const skin = '#fcdbaf'; const handle = '#8B4513';
+            const skin = '#fcdbaf'; const handle = '#8B4513'; const head = '#dddddd';
+            let isSwinging = p.swingTimer > 0;
             let proj = project(p.x + PADDLE_WIDTH / 2, p.y + PADDLE_HEIGHT / 2);
+            
             ctx.save(); ctx.translate(proj.x, proj.y); ctx.scale(proj.scale, proj.scale); 
             ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.ellipse(0, 20, 25, 10, 0, 0, Math.PI * 2); ctx.fill();
-            colorRect(-25, -15, 50, 25, p.color); colorRect(-13, -40, 26, 26, skin); 
+
+            if (p.isBottom) {
+                colorRect(-25, -15, 50, 25, p.color); colorRect(-13, -40, 26, 26, skin); 
+                if (isSwinging) {
+                    colorRect(15, -30, 12, 12, skin); colorRect(10, -40, 6, 20, handle); 
+                    ctx.strokeStyle = head; ctx.lineWidth = 3; ctx.strokeRect(0, -60, 20, 20); 
+                } else {
+                    colorRect(25, -10, 12, 12, skin); colorRect(30, -20, 6, 20, handle); 
+                    ctx.strokeStyle = head; ctx.lineWidth = 3; ctx.strokeRect(20, -45, 20, 25); 
+                }
+            } else {
+                colorRect(-25, -15, 50, 25, p.color); colorRect(-13, -35, 26, 26, skin); 
+                if (isSwinging) {
+                    colorRect(-30, 10, 12, 12, skin); colorRect(-30, 15, 6, 20, handle); 
+                    ctx.strokeStyle = head; ctx.lineWidth = 3; ctx.strokeRect(-40, 35, 20, 20); 
+                } else {
+                    colorRect(-35, -10, 12, 12, skin); colorRect(-30, -5, 6, 20, handle); 
+                    ctx.strokeStyle = head; ctx.lineWidth = 3; ctx.strokeRect(-40, 15, 20, 25); 
+                }
+            }
             ctx.restore();
         }
 
@@ -389,16 +441,16 @@
             ctx.lineWidth = 4; drawPolygon([cTL, cTR, cBR, cBL], 'white', true);
 
             if (appState === "MENU") {
-                ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0,0,canvas.width,canvas.height);
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = 'bold 30px Arial';
-                ctx.fillText("3D PIXEL TENNIS", 500, 300);
+                ctx.fillText("3D PIXEL TENNIS", 500, 350);
                 ctx.font = '20px Arial';
-                ctx.fillText("1: Local  2: CPU  3: Host Online  4: Join Online", 500, 400);
+                ctx.fillText("1: Local  2: CPU  3: Host Online  4: Join Online", 500, 420);
                 return;
             }
 
             if (appState === "HOSTING") {
-                ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0,0,canvas.width,canvas.height);
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = '30px Arial';
                 ctx.fillText("ROOM CODE: " + myRoomId, 500, 400);
                 return;
@@ -407,6 +459,7 @@
             let renderQueue = [{ type: 'net', y: canvas.height / 2 }];
             players.forEach(p => renderQueue.push({ type: 'player', y: p.y + PADDLE_HEIGHT / 2, obj: p }));
             if (gameState > 0) renderQueue.push({ type: 'ball', y: ballY });
+            
             renderQueue.sort((a, b) => a.y - b.y).forEach(item => {
                 if (item.type === 'net') drawNet();
                 else if (item.type === 'player') drawPixelGuy(item.obj);
@@ -417,8 +470,9 @@
                 }
             });
 
+            ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0,0,200,100);
             ctx.fillStyle = 'white'; ctx.font = 'bold 20px Arial'; ctx.textAlign = 'left';
-            ctx.fillText(`SCORE: ${getScoreString()}`, 20, 50);
+            ctx.fillText(`SCORE: ${getScoreString()}`, 15, 50);
             if (alertTimer > 0) { ctx.fillStyle = 'yellow'; ctx.textAlign = 'center'; ctx.fillText(alertMessage, 500, 200); }
         }
 
