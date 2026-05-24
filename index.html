@@ -1,118 +1,265 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
-    <title>Pixel Tennis Online</title>
+    <title>3D Pixel Tennis - Online & AI</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { background: #111; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; font-family: sans-serif; }
-        canvas { background: #1a4f1a; border: 4px solid #fff; }
-        #status { position: absolute; top: 10px; background: rgba(0,0,0,0.8); padding: 10px; border-radius: 5px; }
+        body {
+            background-color: #111; color: white;
+            display: flex; justify-content: center; align-items: center;
+            height: 100vh; margin: 0; font-family: 'Segoe UI', sans-serif; overflow: hidden;
+        }
+        canvas {
+            background-color: #1a4f1a; border: 4px solid #fff;
+            border-bottom: 12px solid #ddd; border-radius: 4px;
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.9);
+        }
+        #status {
+            position: absolute; top: 15px; background: rgba(0,0,0,0.8);
+            padding: 8px 20px; border-radius: 5px; border: 1px solid #444;
+        }
     </style>
 </head>
 <body>
 
     <div id="status">Loading PeerJS...</div>
-    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div class="container">
+        <canvas id="gameCanvas" width="1000" height="800"></canvas>
+    </div>
 
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         const statusEl = document.getElementById('status');
-
-        let appState = "MENU";
-        let peer = null;
-        let conn = null;
-        let isHost = false;
         
-        // Game Objects
-        let ball = { x: 400, y: 300, vx: 4, vy: 4 };
-        let p1 = { x: 350, y: 550, w: 100, h: 15 };
-        let p2 = { x: 350, y: 35, w: 100, h: 15 };
-        let keys = {};
-        let remoteKeys = { left: false, right: false };
+        const MARGIN_X = 220; const MARGIN_Y = 100;
+        const PADDLE_WIDTH = 70; const PADDLE_HEIGHT = 45; 
+        const PADDLE_SPEED = 7.5; const SWING_DURATION = 15;
+        const GRAVITY = 0.35; const ballRadius = 9;
 
-        // Wait for PeerJS to load
-        function init() {
-            if (window.Peer) {
-                statusEl.innerText = "Ready! [3] Host | [4] Join";
-            } else {
-                setTimeout(init, 500);
-            }
+        // --- STATE ---
+        let appState = "MENU";
+        let gameMode = 0; // 2: AI, 3: Host, 4: Client
+        let peer = null, conn = null, isHost = false, isClient = false;
+        let myRoomId = "";
+        let clientKeys = { left: false, right: false, swing: false };
+
+        // --- GAME VARIABLES ---
+        let p1Points = 0, p2Points = 0, p1Games = 0, p2Games = 0;
+        let server = 1, faults = 0, rallies = 0, lastHitter = 0; 
+        let alertMessage = "", alertTimer = 0;
+        let gameState = 0; 
+        let ballX = 0, ballY = 0, ballZ = 0, ballZVelocity = 0, ballSpeedX = 0, ballSpeedY = 0;
+        let players = [];
+        const keys = {};
+
+        // --- INITIALIZATION ---
+        function initNetwork() {
+            if (window.Peer) statusEl.innerText = "Ready: [2] vs AI | [3] Host | [4] Join";
+            else setTimeout(initNetwork, 500);
         }
-        init();
+        initNetwork();
 
         window.addEventListener("keydown", e => {
             keys[e.code] = true;
             if (appState === "MENU") {
+                if (e.code === "Digit2") startAI();
                 if (e.code === "Digit3") startHosting();
                 if (e.code === "Digit4") joinGame();
             }
         });
         window.addEventListener("keyup", e => keys[e.code] = false);
 
+        // --- MODES ---
+        function startAI() {
+            appState = "PLAY"; gameMode = 2; isHost = false; isClient = false;
+            statusEl.innerText = "Playing vs CPU";
+            setupPlayers(true); resetPoint();
+        }
+
         function startHosting() {
-            appState = "HOSTING";
-            const code = Math.random().toString(36).substring(2, 6).toUpperCase();
-            peer = new Peer("TENNIS-" + code);
-            
-            peer.on('open', id => { statusEl.innerText = "CODE: " + code; });
+            appState = "HOSTING"; gameMode = 3;
+            myRoomId = Math.random().toString(36).substring(2, 6).toUpperCase();
+            peer = new Peer("TENNIS-" + myRoomId);
+            peer.on('open', id => statusEl.innerText = "CODE: " + myRoomId);
             peer.on('connection', c => {
                 conn = c;
                 conn.on('open', () => {
-                    isHost = true; appState = "PLAY";
-                    statusEl.innerText = "Playing as HOST";
-                    conn.on('data', d => { if(d.type==='keys') remoteKeys = d.keys; });
+                    isHost = true; isClient = false; appState = "PLAY";
+                    setupPlayers(false); resetPoint();
+                    conn.on('data', d => { if(d.type==='keys') clientKeys = d.keys; });
                 });
             });
         }
 
         function joinGame() {
-            let input = prompt("Enter Code:");
-            if (!input) return; // FIX: Prevents the 'toUpperCase' crash
-            
-            let code = "TENNIS-" + input.toUpperCase();
-            appState = "CONNECTING";
-            statusEl.innerText = "Connecting...";
-            
+            let code = prompt("Enter 4-Letter Code:");
+            if (!code) return;
+            appState = "CONNECTING"; gameMode = 4;
             peer = new Peer();
             peer.on('open', () => {
-                conn = peer.connect(code);
+                conn = peer.connect("TENNIS-" + code.toUpperCase());
                 conn.on('open', () => {
-                    isHost = false; appState = "PLAY";
-                    statusEl.innerText = "Playing as CLIENT";
-                    conn.on('data', d => { if(d.type==='sync') { ball=d.b; p1.x=d.p1; p2.x=d.p2; }});
+                    isHost = false; isClient = true; appState = "PLAY";
+                    setupPlayers(false);
+                    conn.on('data', d => {
+                        if(d.type==='sync') {
+                            ballX = d.s.bX; ballY = d.s.bY; ballZ = d.s.bZ;
+                            players[0].x = d.s.p1X; players[0].swingTimer = d.s.p1S;
+                            players[1].x = d.s.p2X; players[1].swingTimer = d.s.p2S;
+                            p1Points = d.s.s1; p2Points = d.s.s2;
+                            p1Games = d.s.g1; p2Games = d.s.g2;
+                            gameState = d.s.gs; server = d.s.sv;
+                            alertMessage = d.s.msg; alertTimer = d.s.msgT;
+                        }
+                    });
                 });
             });
         }
 
-        function update() {
-            ctx.fillStyle = '#1a4f1a';
-            ctx.fillRect(0, 0, 800, 600);
-
-            if (appState === "MENU") {
-                ctx.fillStyle = "white"; ctx.textAlign = "center"; ctx.font = "30px Arial";
-                ctx.fillText("PIXEL TENNIS", 400, 300);
-            } else if (appState === "PLAY") {
-                if (isHost) {
-                    if (keys['ArrowLeft']) p1.x -= 7; if (keys['ArrowRight']) p1.x += 7;
-                    if (remoteKeys.left) p2.x -= 7; if (remoteKeys.right) p2.x += 7;
-                    ball.x += ball.vx; ball.y += ball.vy;
-                    if (ball.x < 0 || ball.x > 800) ball.vx *= -1;
-                    if (ball.y > 540 && ball.x > p1.x && ball.x < p1.x + 100) ball.vy *= -1;
-                    if (ball.y < 50 && ball.x > p2.x && ball.x < p2.x + 100) ball.vy *= -1;
-                    if (ball.y < 0 || ball.y > 600) { ball.x = 400; ball.y = 300; }
-                    if (conn && conn.open) conn.send({type:'sync', b:ball, p1:p1.x, p2:p2.x});
-                } else {
-                    if (conn && conn.open) conn.send({type:'keys', keys:{left:keys['ArrowLeft'], right:keys['ArrowRight']}});
-                }
-                ctx.fillStyle = "blue"; ctx.fillRect(p1.x, p1.y, p1.w, p1.h);
-                ctx.fillStyle = "red"; ctx.fillRect(p2.x, p2.y, p2.w, p2.h);
-                ctx.fillStyle = "yellow"; ctx.beginPath(); ctx.arc(ball.x, ball.y, 8, 0, Math.PI*2); ctx.fill();
-            }
-            requestAnimationFrame(update);
+        function setupPlayers(vsAI) {
+            players = [
+                { id: 1, team: 1, x: 500-PADDLE_WIDTH/2, y: canvas.height - MARGIN_Y - 65, color: '#1e90ff', isBottom: true, swingTimer: 0, isAI: false },
+                { id: 2, team: 2, x: 500-PADDLE_WIDTH/2, y: MARGIN_Y + 20, color: vsAI ? '#8b0000' : '#ff4500', isBottom: false, swingTimer: 0, isAI: vsAI }
+            ];
         }
-        update();
+
+        // --- CORE LOOP ---
+        setInterval(() => {
+            if (appState === "PLAY") {
+                if (!isClient) moveEverything();
+                if (isHost && conn && conn.open) {
+                    conn.send({ type: 'sync', s: {
+                        bX: ballX, bY: ballY, bZ: ballZ, p1X: players[0].x, p1S: players[0].swingTimer,
+                        p2X: players[1].x, p2S: players[1].swingTimer, s1: p1Points, s2: p2Points,
+                        g1: p1Games, g2: p2Games, gs: gameState, sv: server, msg: alertMessage, msgT: alertTimer
+                    }});
+                }
+                if (isClient && conn && conn.open) {
+                    conn.send({ type: 'keys', keys: { 
+                        left: keys['KeyA'] || keys['ArrowLeft'], 
+                        right: keys['KeyD'] || keys['ArrowRight'], 
+                        swing: keys['Space'] 
+                    }});
+                }
+            }
+            drawEverything();
+        }, 1000 / 60);
+
+        function resetPoint() {
+            gameState = 0; ballZ = 0; ballSpeedX = 0; ballSpeedY = 0;
+            showAlert(server === 1 ? "BOTTOM SERVES" : "TOP SERVES");
+        }
+
+        function showAlert(msg) { alertMessage = msg; alertTimer = 120; }
+
+        function scorePoint(winner) {
+            gameState = 3; if (winner === 1) p1Points++; else p2Points++;
+            if (p1Points >= 4 && p1Points - p2Points >= 2) { p1Games++; resetMatch(); }
+            else if (p2Points >= 4 && p2Points - p1Points >= 2) { p2Games++; resetMatch(); }
+            else setTimeout(resetPoint, 1000);
+        }
+
+        function resetMatch() { p1Points = 0; p2Points = 0; server = server === 1 ? 2 : 1; setTimeout(resetPoint, 1500); }
+
+        function moveEverything() {
+            if (alertTimer > 0) alertTimer--;
+            players.forEach((p, i) => {
+                if (p.swingTimer > 0) p.swingTimer--;
+                
+                let mLeft, mRight, swing;
+                if (p.isAI) {
+                    // Simple AI
+                    let targetX = ballX - PADDLE_WIDTH/2;
+                    if (p.x < targetX) p.x += PADDLE_SPEED * 0.6;
+                    if (p.x > targetX) p.x -= PADDLE_SPEED * 0.6;
+                    if (gameState === 0 && server === 2) swing = true;
+                    if (ballY < p.y + 100 && ballSpeedY < 0) swing = true;
+                } else {
+                    mLeft = i === 0 ? (keys['KeyA'] || keys['ArrowLeft']) : clientKeys.left;
+                    mRight = i === 0 ? (keys['KeyD'] || keys['ArrowRight']) : clientKeys.right;
+                    swing = i === 0 ? keys['Space'] : clientKeys.swing;
+                    if (mLeft && p.x > MARGIN_X) p.x -= PADDLE_SPEED;
+                    if (mRight && p.x < canvas.width - MARGIN_X - PADDLE_WIDTH) p.x += PADDLE_SPEED;
+                }
+
+                if (swing && p.swingTimer === 0) {
+                    if (gameState === 0 && server === p.team) { gameState = 1; ballZVelocity = 10; }
+                    else p.swingTimer = SWING_DURATION;
+                }
+            });
+
+            if (gameState === 0) {
+                let s = players[server-1]; ballX = s.x + PADDLE_WIDTH/2; ballY = s.y + PADDLE_HEIGHT/2;
+            } else {
+                ballX += ballSpeedX; ballY += ballSpeedY;
+                ballZ += ballZVelocity; ballZVelocity -= GRAVITY;
+                if (ballZ < 0) { ballZ = 0; ballZVelocity = Math.abs(ballZVelocity) * 0.6; }
+                
+                players.forEach(p => {
+                    if (p.swingTimer > 0 && ballX > p.x && ballX < p.x + PADDLE_WIDTH && ballY > p.y && ballY < p.y + PADDLE_HEIGHT && ballZ < 50) {
+                        gameState = 2; ballSpeedY = p.isBottom ? -9 : 9;
+                        ballSpeedX = (ballX - (p.x + PADDLE_WIDTH/2)) * 0.15;
+                        ballZVelocity = 6;
+                    }
+                });
+
+                if (ballY < 0 || ballY > canvas.height) scorePoint(ballY < 0 ? 1 : 2);
+                if (ballX < MARGIN_X || ballX > canvas.width - MARGIN_X) ballSpeedX *= -1;
+            }
+        }
+
+        // --- RENDER ENGINE ---
+        function project(x, y, z = 0) {
+            let pct = y / canvas.height;
+            let scale = 0.35 + (0.65 * pct);
+            return {
+                x: (canvas.width/2) + (x - (canvas.width/2)) * scale,
+                y: canvas.height * (pct * pct * 0.3 + pct * 0.7) - (z * scale),
+                scale: scale
+            };
+        }
+
+        function drawPixelGuy(p) {
+            let proj = project(p.x + PADDLE_WIDTH/2, p.y + PADDLE_HEIGHT/2);
+            ctx.save(); ctx.translate(proj.x, proj.y); ctx.scale(proj.scale, proj.scale);
+            ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.beginPath(); ctx.ellipse(0, 20, 25, 10, 0, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = p.color; ctx.fillRect(-25, -15, 50, 25);
+            ctx.fillStyle = '#fcdbaf'; ctx.fillRect(-13, -40, 26, 26);
+            if (p.swingTimer > 0) { ctx.fillStyle = '#8B4513'; ctx.fillRect(18, -35, 6, 30); }
+            ctx.restore();
+        }
+
+        function drawEverything() {
+            ctx.fillStyle = '#1a4f1a'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            let cTL = project(MARGIN_X, MARGIN_Y), cTR = project(canvas.width-MARGIN_X, MARGIN_Y);
+            let cBL = project(MARGIN_X, canvas.height-MARGIN_Y), cBR = project(canvas.width-MARGIN_X, canvas.height-MARGIN_Y);
+            ctx.fillStyle = '#2b7a2b'; ctx.beginPath(); ctx.moveTo(cTL.x, cTL.y); ctx.lineTo(cTR.x, cTR.y); ctx.lineTo(cBR.x, cBR.y); ctx.lineTo(cBL.x, cBL.y); ctx.fill();
+            ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
+            
+            if (appState === "MENU") {
+                ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(0,0,canvas.width,canvas.height);
+                ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = '50px Arial';
+                ctx.fillText("3D PIXEL TENNIS", 500, 300);
+                ctx.font = '24px Arial'; ctx.fillStyle = '#ff4500'; ctx.fillText("[2] VS CPU AI", 500, 380);
+                ctx.fillStyle = '#1e90ff'; ctx.fillText("[3] HOST ONLINE", 500, 430);
+                ctx.fillStyle = '#ff1493'; ctx.fillText("[4] JOIN ONLINE", 500, 480);
+                return;
+            }
+
+            drawPixelGuy(players[1]);
+            drawPixelGuy(players[0]);
+            
+            if (gameState > 0 || appState === "PLAY") {
+                let bP = project(ballX, ballY, ballZ);
+                ctx.fillStyle = '#ccff00'; ctx.beginPath(); ctx.arc(bP.x, bP.y, ballRadius*bP.scale, 0, Math.PI*2); ctx.fill();
+            }
+
+            ctx.fillStyle = 'white'; ctx.textAlign = 'left'; ctx.font = '18px Arial';
+            ctx.fillText(`GAMES: ${p1Games}-${p2Games} | SCORE: ${p1Points*15}-${p2Points*15}`, 20, 40);
+            if (alertTimer > 0) { ctx.fillStyle = 'yellow'; ctx.textAlign = 'center'; ctx.font = '30px Arial'; ctx.fillText(alertMessage, 500, 300); }
+        }
     </script>
 </body>
 </html>
