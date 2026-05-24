@@ -2,264 +2,428 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>3D Pixel Tennis - Online & AI</title>
+    <title>3D Perspective Pixel Tennis (WebRTC)</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         body {
-            background-color: #111; color: white;
-            display: flex; justify-content: center; align-items: center;
-            height: 100vh; margin: 0; font-family: 'Segoe UI', sans-serif; overflow: hidden;
+            background-color: #111;
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
         }
         canvas {
-            background-color: #1a4f1a; border: 4px solid #fff;
-            border-bottom: 12px solid #ddd; border-radius: 4px;
+            background-color: #1a4f1a; 
+            border: 4px solid #fff;
+            border-bottom: 12px solid #ddd;
             box-shadow: 0 15px 40px rgba(0, 0, 0, 0.9);
+            border-radius: 4px;
         }
-        #status {
-            position: absolute; top: 15px; background: rgba(0,0,0,0.8);
-            padding: 8px 20px; border-radius: 5px; border: 1px solid #444;
+        .container {
+            text-align: center;
         }
     </style>
 </head>
 <body>
 
-    <div id="status">Loading PeerJS...</div>
     <div class="container">
+        <h2 style="margin-top: 10px; margin-bottom: 10px;">3D Pixel Tennis Online</h2>
         <canvas id="gameCanvas" width="1000" height="800"></canvas>
     </div>
 
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
-        const statusEl = document.getElementById('status');
+        const framesPerSecond = 60;
         
-        const MARGIN_X = 220; const MARGIN_Y = 100;
-        const PADDLE_WIDTH = 70; const PADDLE_HEIGHT = 45; 
-        const PADDLE_SPEED = 7.5; const SWING_DURATION = 15;
-        const GRAVITY = 0.35; const ballRadius = 9;
+        const MARGIN_X = 220; 
+        const MARGIN_Y = 100;
 
-        // --- STATE ---
-        let appState = "MENU";
-        let gameMode = 0; // 2: AI, 3: Host, 4: Client
-        let peer = null, conn = null, isHost = false, isClient = false;
-        let myRoomId = "";
-        let clientKeys = { left: false, right: false, swing: false };
+        // --- APP & MULTIPLAYER STATE ---
+        let appState = "MENU"; 
+        let gameMode = 1; 
+        let resetTimeout = null; 
+        
+        // WebRTC Variables
+        let peer = null;
+        let conn = null;
+        let isHost = false;
+        let isClient = false;
+        let myRoomId = "Generating...";
+        let clientKeys = { left: false, right: false, swing: false }; 
 
-        // --- GAME VARIABLES ---
-        let p1Points = 0, p2Points = 0, p1Games = 0, p2Games = 0;
-        let server = 1, faults = 0, rallies = 0, lastHitter = 0; 
-        let alertMessage = "", alertTimer = 0;
+        // Game Variables
+        let p1Points = 0; let p2Points = 0;
+        let p1Games = 0; let p2Games = 0;
+        const scoreNames = ["Love", "15", "30", "40"];
+        
+        let server = 1; let faults = 0; let rallies = 0; let lastHitter = 0; 
+        let alertMessage = ""; let alertTimer = 0;
+
+        // Physics Variables
         let gameState = 0; 
-        let ballX = 0, ballY = 0, ballZ = 0, ballZVelocity = 0, ballSpeedX = 0, ballSpeedY = 0;
+        let ballX = 0; let ballY = 0; let ballZ = 0; let ballZVelocity = 0;
+        const GRAVITY = 0.35; 
+        let ballSpeedX = 0; let ballSpeedY = 0;
+        const ballRadius = 9;
+
+        // Players
         let players = [];
+        const PADDLE_WIDTH = 70; const PADDLE_HEIGHT = 45; 
+        const PADDLE_SPEED = 7.5; const SWING_DURATION = 15; 
+
         const keys = {};
 
-        // --- INITIALIZATION ---
-        function initNetwork() {
-            if (window.Peer) statusEl.innerText = "Ready: [2] vs AI | [3] Host | [4] Join";
-            else setTimeout(initNetwork, 500);
-        }
-        initNetwork();
-
-        window.addEventListener("keydown", e => {
+        document.addEventListener("keydown", (e) => {
             keys[e.code] = true;
-            if (appState === "MENU") {
-                if (e.code === "Digit2") startAI();
-                if (e.code === "Digit3") startHosting();
-                if (e.code === "Digit4") joinGame();
-            }
-        });
-        window.addEventListener("keyup", e => keys[e.code] = false);
+            if(["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
 
-        // --- MODES ---
-        function startAI() {
-            appState = "PLAY"; gameMode = 2; isHost = false; isClient = false;
-            statusEl.innerText = "Playing vs CPU";
-            setupPlayers(true); resetPoint();
-        }
+            if (appState === "MENU") {
+                if (e.code === "Digit1") startGame(1); // Local PvP
+                if (e.code === "Digit2") startGame(3); // CPU
+                if (e.code === "Digit3") startHosting(); // WebRTC Host
+                if (e.code === "Digit4") joinGame(); // WebRTC Join
+                return;
+            }
+
+            // In online Client mode, trigger local animation immediately for responsive feel
+            if (isClient && e.code === 'Space') {
+                if (players[1] && players[1].swingTimer === 0) players[1].swingTimer = SWING_DURATION;
+            }
+
+            players.forEach(p => {
+                if (!p.isAI && e.code === p.controls.swing && !isClient) {
+                    if (gameState === 0 && server === p.team && p.canServe) {
+                        gameState = 1; ballZVelocity = 10; 
+                    } else if (p.swingTimer === 0) {
+                        p.swingTimer = SWING_DURATION;
+                    }
+                }
+            });
+        });
+
+        document.addEventListener("keyup", (e) => {
+            keys[e.code] = false;
+        });
+
+        // --- WEBRTC NETWORKING LOGIC ---
 
         function startHosting() {
-            appState = "HOSTING"; gameMode = 3;
-            myRoomId = Math.random().toString(36).substring(2, 6).toUpperCase();
-            peer = new Peer("TENNIS-" + myRoomId);
-            peer.on('open', id => statusEl.innerText = "CODE: " + myRoomId);
-            peer.on('connection', c => {
-                conn = c;
+            appState = "HOSTING";
+            isHost = true;
+            isClient = false;
+            
+            let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            let shortId = "";
+            for(let i=0; i<4; i++) shortId += chars.charAt(Math.floor(Math.random() * chars.length));
+            myRoomId = shortId;
+
+            peer = new Peer("tennis-" + myRoomId); 
+            peer.on('connection', (connection) => {
+                conn = connection;
                 conn.on('open', () => {
-                    isHost = true; isClient = false; appState = "PLAY";
-                    setupPlayers(false); resetPoint();
-                    conn.on('data', d => { if(d.type==='keys') clientKeys = d.keys; });
+                    conn.on('data', (data) => {
+                        if (data.type === 'keys') clientKeys = data.keys; 
+                    });
+                    startGame(4); // Start Online Match
                 });
             });
         }
 
         function joinGame() {
-            let code = prompt("Enter 4-Letter Code:");
-            if (!code) return;
-            appState = "CONNECTING"; gameMode = 4;
-            peer = new Peer();
-            peer.on('open', () => {
-                conn = peer.connect("TENNIS-" + code.toUpperCase());
-                conn.on('open', () => {
-                    isHost = false; isClient = true; appState = "PLAY";
-                    setupPlayers(false);
-                    conn.on('data', d => {
-                        if(d.type==='sync') {
-                            ballX = d.s.bX; ballY = d.s.bY; ballZ = d.s.bZ;
-                            players[0].x = d.s.p1X; players[0].swingTimer = d.s.p1S;
-                            players[1].x = d.s.p2X; players[1].swingTimer = d.s.p2S;
-                            p1Points = d.s.s1; p2Points = d.s.s2;
-                            p1Games = d.s.g1; p2Games = d.s.g2;
-                            gameState = d.s.gs; server = d.s.sv;
-                            alertMessage = d.s.msg; alertTimer = d.s.msgT;
-                        }
-                    });
+            let roomCode = prompt("Enter the 4-letter Room Code:");
+            if (!roomCode) return;
+            appState = "CONNECTING";
+            isClient = true;
+            peer = new Peer(); 
+            peer.on('open', (id) => {
+                conn = peer.connect("tennis-" + roomCode.toUpperCase());
+                conn.on('open', () => startGame(5));
+                conn.on('data', (data) => {
+                    if (data.type === 'sync') {
+                        ballX = data.state.bX; ballY = data.state.bY; ballZ = data.state.bZ;
+                        players[0].x = data.state.p1X; players[0].swingTimer = data.state.p1S;
+                        players[1].x = data.state.p2X; 
+                        if (!players[1].swingTimer) players[1].swingTimer = data.state.p2S; 
+                        p1Points = data.state.s1; p2Points = data.state.s2;
+                        p1Games = data.state.g1; p2Games = data.state.g2;
+                        gameState = data.state.gs; server = data.state.sv;
+                        alertMessage = data.state.msg; alertTimer = data.state.msgT;
+                    }
                 });
             });
         }
 
-        function setupPlayers(vsAI) {
-            players = [
-                { id: 1, team: 1, x: 500-PADDLE_WIDTH/2, y: canvas.height - MARGIN_Y - 65, color: '#1e90ff', isBottom: true, swingTimer: 0, isAI: false },
-                { id: 2, team: 2, x: 500-PADDLE_WIDTH/2, y: MARGIN_Y + 20, color: vsAI ? '#8b0000' : '#ff4500', isBottom: false, swingTimer: 0, isAI: vsAI }
-            ];
+        function syncToClient() {
+            if (isHost && conn && conn.open) {
+                conn.send({
+                    type: 'sync',
+                    state: {
+                        bX: ballX, bY: ballY, bZ: ballZ,
+                        p1X: players[0].x, p1S: players[0].swingTimer,
+                        p2X: players[1].x, p2S: players[1].swingTimer,
+                        s1: p1Points, s2: p2Points, g1: p1Games, g2: p2Games,
+                        gs: gameState, sv: server, msg: alertMessage, msgT: alertTimer
+                    }
+                });
+            }
         }
 
-        // --- CORE LOOP ---
+        function sendKeysToHost() {
+            if (isClient && conn && conn.open) {
+                conn.send({
+                    type: 'keys',
+                    keys: { 
+                        left: keys['KeyA'] || keys['ArrowLeft'], 
+                        right: keys['KeyD'] || keys['ArrowRight'], 
+                        swing: keys['Space'] || keys['Enter'] 
+                    }
+                });
+            }
+        }
+
+        // --- GAME LOGIC ---
+
+        function startGame(mode) {
+            if (resetTimeout) clearTimeout(resetTimeout);
+            gameMode = mode;
+            p1Points = p2Points = p1Games = p2Games = 0;
+            server = 1;
+            appState = "PLAY";
+            setupPlayers();
+            resetPoint();
+        }
+
+        function setupPlayers() {
+            players = [];
+            players.push({
+                id: 1, team: 1, canServe: true, x: canvas.width / 2 - PADDLE_WIDTH / 2, y: canvas.height - MARGIN_Y - PADDLE_HEIGHT - 20,
+                color: '#1e90ff', isBottom: true, swingTimer: 0, isAI: false,
+                controls: { left: 'KeyA', right: 'KeyD', swing: 'Space' } 
+            });
+
+            if (gameMode === 1) { // Local PvP
+                players.push({
+                    id: 2, team: 2, canServe: true, x: canvas.width / 2 - PADDLE_WIDTH / 2, y: MARGIN_Y + 20,
+                    color: '#ff4500', isBottom: false, swingTimer: 0, isAI: false,
+                    controls: { left: 'ArrowLeft', right: 'ArrowRight', swing: 'Enter' }
+                });
+            } else if (gameMode === 3) { // AI
+                players.push({
+                    id: 2, team: 2, canServe: true, x: canvas.width / 2 - PADDLE_WIDTH / 2, y: MARGIN_Y + 20,
+                    color: '#8b0000', isBottom: false, swingTimer: 0, isAI: true, aiTimer: 0, aiSwingDelay: 0,
+                    controls: {} 
+                });
+            } else { // Online (Host/Client)
+                players.push({
+                    id: 2, team: 2, canServe: true, x: canvas.width / 2 - PADDLE_WIDTH / 2, y: MARGIN_Y + 20,
+                    color: '#ff4500', isBottom: false, swingTimer: 0, isAI: false,
+                    controls: { left: 'RemoteLeft', right: 'RemoteRight', swing: 'RemoteSwing' } 
+                });
+            }
+        }
+
         setInterval(() => {
             if (appState === "PLAY") {
                 if (!isClient) moveEverything();
-                if (isHost && conn && conn.open) {
-                    conn.send({ type: 'sync', s: {
-                        bX: ballX, bY: ballY, bZ: ballZ, p1X: players[0].x, p1S: players[0].swingTimer,
-                        p2X: players[1].x, p2S: players[1].swingTimer, s1: p1Points, s2: p2Points,
-                        g1: p1Games, g2: p2Games, gs: gameState, sv: server, msg: alertMessage, msgT: alertTimer
-                    }});
-                }
-                if (isClient && conn && conn.open) {
-                    conn.send({ type: 'keys', keys: { 
-                        left: keys['KeyA'] || keys['ArrowLeft'], 
-                        right: keys['KeyD'] || keys['ArrowRight'], 
-                        swing: keys['Space'] 
-                    }});
-                }
+                if (isHost) syncToClient();
+                if (isClient) sendKeysToHost();
             }
             drawEverything();
-        }, 1000 / 60);
-
-        function resetPoint() {
-            gameState = 0; ballZ = 0; ballSpeedX = 0; ballSpeedY = 0;
-            showAlert(server === 1 ? "BOTTOM SERVES" : "TOP SERVES");
-        }
+        }, 1000 / framesPerSecond);
 
         function showAlert(msg) { alertMessage = msg; alertTimer = 120; }
 
-        function scorePoint(winner) {
-            gameState = 3; if (winner === 1) p1Points++; else p2Points++;
-            if (p1Points >= 4 && p1Points - p2Points >= 2) { p1Games++; resetMatch(); }
-            else if (p2Points >= 4 && p2Points - p1Points >= 2) { p2Games++; resetMatch(); }
-            else setTimeout(resetPoint, 1000);
+        function resetPoint() {
+            if (isClient) return;
+            gameState = 0; rallies = 0; ballSpeedX = 0; ballSpeedY = 0; ballZ = 0;
+            if (faults === 0) showAlert(server === 1 ? "BOTTOM SERVES" : "TOP SERVES");
         }
 
-        function resetMatch() { p1Points = 0; p2Points = 0; server = server === 1 ? 2 : 1; setTimeout(resetPoint, 1500); }
+        function handleFault() {
+            if (isClient) return;
+            gameState = 3; faults++;
+            if (faults >= 2) { showAlert("DOUBLE FAULT!"); scorePoint(server === 1 ? 2 : 1); } 
+            else { showAlert("FAULT! Second Serve."); resetTimeout = setTimeout(resetPoint, 1000); }
+        }
+
+        function scorePoint(winnerTeam) {
+            if (isClient) return;
+            gameState = 3; 
+            if (winnerTeam === 1) p1Points++; else p2Points++;
+            faults = 0;
+            if (p1Points >= 4 && p1Points - p2Points >= 2) {
+                p1Games++; showAlert("BOTTOM WINS MATCH!"); resetTimeout = setTimeout(resetGame, 2000);
+            } else if (p2Points >= 4 && p2Points - p1Points >= 2) {
+                p2Games++; showAlert("TOP WINS MATCH!"); resetTimeout = setTimeout(resetGame, 2000);
+            } else { resetTimeout = setTimeout(resetPoint, 1000); }
+        }
+
+        function resetGame() { p1Points = 0; p2Points = 0; server = server === 1 ? 2 : 1; resetPoint(); }
+
+        function getScoreString() {
+            if (p1Points >= 3 && p2Points >= 3) {
+                if (p1Points === p2Points) return "Deuce";
+                if (p1Points > p2Points) return "Adv BTM";
+                return "Adv TOP";
+            }
+            return (p1Points < 4 ? scoreNames[p1Points] : "40") + " - " + (p2Points < 4 ? scoreNames[p2Points] : "40");
+        }
 
         function moveEverything() {
             if (alertTimer > 0) alertTimer--;
-            players.forEach((p, i) => {
-                if (p.swingTimer > 0) p.swingTimer--;
-                
-                let mLeft, mRight, swing;
-                if (p.isAI) {
-                    // Simple AI
-                    let targetX = ballX - PADDLE_WIDTH/2;
-                    if (p.x < targetX) p.x += PADDLE_SPEED * 0.6;
-                    if (p.x > targetX) p.x -= PADDLE_SPEED * 0.6;
-                    if (gameState === 0 && server === 2) swing = true;
-                    if (ballY < p.y + 100 && ballSpeedY < 0) swing = true;
-                } else {
-                    mLeft = i === 0 ? (keys['KeyA'] || keys['ArrowLeft']) : clientKeys.left;
-                    mRight = i === 0 ? (keys['KeyD'] || keys['ArrowRight']) : clientKeys.right;
-                    swing = i === 0 ? keys['Space'] : clientKeys.swing;
-                    if (mLeft && p.x > MARGIN_X) p.x -= PADDLE_SPEED;
-                    if (mRight && p.x < canvas.width - MARGIN_X - PADDLE_WIDTH) p.x += PADDLE_SPEED;
-                }
 
-                if (swing && p.swingTimer === 0) {
-                    if (gameState === 0 && server === p.team) { gameState = 1; ballZVelocity = 10; }
-                    else p.swingTimer = SWING_DURATION;
+            players.forEach(p => {
+                if (p.swingTimer > 0) p.swingTimer--;
+
+                if (p.isAI) {
+                    // Optimized AI logic from previous version
+                    if (gameState === 0 && server === p.team && p.canServe) {
+                        p.aiTimer++;
+                        if (p.aiTimer > 60) { gameState = 1; ballZVelocity = 10; p.aiTimer = 0; p.aiSwingDelay = 25; }
+                    } else if (gameState === 1 && server === p.team && p.canServe) {
+                        if (p.aiSwingDelay > 0) p.aiSwingDelay--;
+                        if (p.aiSwingDelay === 0 && p.swingTimer === 0) p.swingTimer = SWING_DURATION;
+                    } else if (gameState > 0 && ballSpeedY < 0 && !p.isBottom) {
+                        if (ballY < p.y + PADDLE_HEIGHT + 60 && p.swingTimer === 0) p.swingTimer = SWING_DURATION;
+                    }
+
+                    if (gameState > 0) {
+                        let speed = PADDLE_SPEED * 1.5; 
+                        if (ballSpeedY < 0) { 
+                            let targetX = ballX - PADDLE_WIDTH / 2;
+                            if (p.x < targetX - 2) p.x += speed;
+                            if (p.x > targetX + 2) p.x -= speed;
+                        } else {
+                            let targetX = canvas.width / 2 - PADDLE_WIDTH / 2;
+                            if (p.x < targetX - 5) p.x += speed * 0.5;
+                            if (p.x > targetX + 5) p.x -= speed * 0.5;
+                        }
+                    }
+                } else {
+                    let moveLeft = keys[p.controls.left], moveRight = keys[p.controls.right], swing = keys[p.controls.swing];
+                    if (isHost && !p.isBottom) { moveLeft = clientKeys.left; moveRight = clientKeys.right; swing = clientKeys.swing; }
+
+                    if (isHost && !p.isBottom && swing && p.swingTimer === 0) {
+                        if (gameState === 0 && server === p.team) { gameState = 1; ballZVelocity = 10; }
+                        else p.swingTimer = SWING_DURATION;
+                    }
+
+                    if (gameState > 0) {
+                        if (moveLeft && p.x > MARGIN_X) p.x -= PADDLE_SPEED;
+                        if (moveRight && p.x < canvas.width - MARGIN_X - PADDLE_WIDTH) p.x += PADDLE_SPEED;
+                    }
                 }
             });
 
             if (gameState === 0) {
-                let s = players[server-1]; ballX = s.x + PADDLE_WIDTH/2; ballY = s.y + PADDLE_HEIGHT/2;
-            } else {
-                ballX += ballSpeedX; ballY += ballSpeedY;
+                let s = players.find(p => p.team === server);
+                if (s) { ballX = s.x + PADDLE_WIDTH / 2; ballY = s.y + PADDLE_HEIGHT / 2; }
+            } else if (gameState >= 1) {
+                if (gameState >= 2) { ballX += ballSpeedX; ballY += ballSpeedY; }
                 ballZ += ballZVelocity; ballZVelocity -= GRAVITY;
-                if (ballZ < 0) { ballZ = 0; ballZVelocity = Math.abs(ballZVelocity) * 0.6; }
-                
-                players.forEach(p => {
-                    if (p.swingTimer > 0 && ballX > p.x && ballX < p.x + PADDLE_WIDTH && ballY > p.y && ballY < p.y + PADDLE_HEIGHT && ballZ < 50) {
-                        gameState = 2; ballSpeedY = p.isBottom ? -9 : 9;
-                        ballSpeedX = (ballX - (p.x + PADDLE_WIDTH/2)) * 0.15;
-                        ballZVelocity = 6;
-                    }
-                });
-
-                if (ballY < 0 || ballY > canvas.height) scorePoint(ballY < 0 ? 1 : 2);
-                if (ballX < MARGIN_X || ballX > canvas.width - MARGIN_X) ballSpeedX *= -1;
+                if (ballZ < 0) { ballZ = 0; if (gameState === 1) handleFault(); else ballZVelocity = Math.abs(ballZVelocity) * 0.7; }
+                checkCollisions(gameState === 1);
+                if (gameState === 2) {
+                    if (ballX < MARGIN_X - 20 || ballX > canvas.width - MARGIN_X + 20) scorePoint(lastHitter === 1 ? 2 : 1);
+                    else if (ballY < 0) scorePoint(1); else if (ballY > canvas.height) scorePoint(2); 
+                }
             }
         }
 
-        // --- RENDER ENGINE ---
+        function checkCollisions(isServe) {
+            players.forEach(p => {
+                if (isServe && (p.team !== server || p.swingTimer === 0 || ballZVelocity > 0 || ballZ > 50)) return; 
+                if (p.swingTimer > 0 && ballX + ballRadius > p.x && ballX - ballRadius < p.x + PADDLE_WIDTH &&
+                    ballY + ballRadius > p.y && ballY - ballRadius < p.y + PADDLE_HEIGHT) {
+                    gameState = 2; rallies++; lastHitter = p.team;
+                    let baseSpeed = isServe ? 8 : Math.abs(ballSpeedY);
+                    ballSpeedY = p.isBottom ? -baseSpeed : baseSpeed;
+                    ballSpeedX = (ballX - (p.x + PADDLE_WIDTH / 2)) * 0.12;
+                    ballZVelocity = isServe ? 4.5 : 5.5 + (Math.abs(ballSpeedY) * 0.05);
+                }
+            });
+        }
+
         function project(x, y, z = 0) {
-            let pct = y / canvas.height;
-            let scale = 0.35 + (0.65 * pct);
-            return {
-                x: (canvas.width/2) + (x - (canvas.width/2)) * scale,
-                y: canvas.height * (pct * pct * 0.3 + pct * 0.7) - (z * scale),
-                scale: scale
-            };
+            let pct = y / canvas.height; let scale = 0.35 + (0.65 * pct); 
+            let pX = (canvas.width / 2) + (x - (canvas.width / 2)) * scale;
+            let pY = canvas.height * (pct * pct * 0.3 + pct * 0.7) - (z * scale);
+            return { x: pX, y: pY, scale: scale };
+        }
+
+        function drawPolygon(points, color, isStroke = false) {
+            ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
+            for(let i=1; i<points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+            ctx.closePath();
+            if(isStroke) { ctx.strokeStyle = color; ctx.stroke(); } else { ctx.fillStyle = color; ctx.fill(); }
+        }
+
+        function drawNet() {
+            const midY = canvas.height / 2;
+            let nB_L = project(MARGIN_X - 25, midY, 0); let nB_R = project(canvas.width - MARGIN_X + 25, midY, 0);
+            let nT_L = project(MARGIN_X - 25, midY, 25); let nT_R = project(canvas.width - MARGIN_X + 25, midY, 25);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.25)'; drawPolygon([nB_L, nB_R, nT_R, nT_L], ctx.fillStyle);
+            ctx.strokeStyle = 'white'; ctx.lineWidth = 4 * nT_L.scale;
+            ctx.beginPath(); ctx.moveTo(nT_L.x, nT_L.y); ctx.lineTo(nT_R.x, nT_R.y); ctx.stroke();
         }
 
         function drawPixelGuy(p) {
-            let proj = project(p.x + PADDLE_WIDTH/2, p.y + PADDLE_HEIGHT/2);
-            ctx.save(); ctx.translate(proj.x, proj.y); ctx.scale(proj.scale, proj.scale);
-            ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.beginPath(); ctx.ellipse(0, 20, 25, 10, 0, 0, Math.PI*2); ctx.fill();
-            ctx.fillStyle = p.color; ctx.fillRect(-25, -15, 50, 25);
-            ctx.fillStyle = '#fcdbaf'; ctx.fillRect(-13, -40, 26, 26);
-            if (p.swingTimer > 0) { ctx.fillStyle = '#8B4513'; ctx.fillRect(18, -35, 6, 30); }
+            const skin = '#fcdbaf'; const handle = '#8B4513';
+            let proj = project(p.x + PADDLE_WIDTH / 2, p.y + PADDLE_HEIGHT / 2);
+            ctx.save(); ctx.translate(proj.x, proj.y); ctx.scale(proj.scale, proj.scale); 
+            ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.ellipse(0, 20, 25, 10, 0, 0, Math.PI * 2); ctx.fill();
+            colorRect(-25, -15, 50, 25, p.color); colorRect(-13, -40, 26, 26, skin); 
             ctx.restore();
         }
 
         function drawEverything() {
             ctx.fillStyle = '#1a4f1a'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-            let cTL = project(MARGIN_X, MARGIN_Y), cTR = project(canvas.width-MARGIN_X, MARGIN_Y);
-            let cBL = project(MARGIN_X, canvas.height-MARGIN_Y), cBR = project(canvas.width-MARGIN_X, canvas.height-MARGIN_Y);
-            ctx.fillStyle = '#2b7a2b'; ctx.beginPath(); ctx.moveTo(cTL.x, cTL.y); ctx.lineTo(cTR.x, cTR.y); ctx.lineTo(cBR.x, cBR.y); ctx.lineTo(cBL.x, cBL.y); ctx.fill();
-            ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
-            
+            let cTL = project(MARGIN_X, MARGIN_Y); let cTR = project(canvas.width - MARGIN_X, MARGIN_Y);
+            let cBL = project(MARGIN_X, canvas.height - MARGIN_Y); let cBR = project(canvas.width - MARGIN_X, canvas.height - MARGIN_Y);
+            ctx.fillStyle = '#2b7a2b'; drawPolygon([cTL, cTR, cBR, cBL], ctx.fillStyle);
+            ctx.lineWidth = 4; drawPolygon([cTL, cTR, cBR, cBL], 'white', true);
+
             if (appState === "MENU") {
-                ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(0,0,canvas.width,canvas.height);
-                ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = '50px Arial';
+                ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0,0,canvas.width,canvas.height);
+                ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = 'bold 30px Arial';
                 ctx.fillText("3D PIXEL TENNIS", 500, 300);
-                ctx.font = '24px Arial'; ctx.fillStyle = '#ff4500'; ctx.fillText("[2] VS CPU AI", 500, 380);
-                ctx.fillStyle = '#1e90ff'; ctx.fillText("[3] HOST ONLINE", 500, 430);
-                ctx.fillStyle = '#ff1493'; ctx.fillText("[4] JOIN ONLINE", 500, 480);
+                ctx.font = '20px Arial';
+                ctx.fillText("1: Local  2: CPU  3: Host Online  4: Join Online", 500, 400);
                 return;
             }
 
-            drawPixelGuy(players[1]);
-            drawPixelGuy(players[0]);
-            
-            if (gameState > 0 || appState === "PLAY") {
-                let bP = project(ballX, ballY, ballZ);
-                ctx.fillStyle = '#ccff00'; ctx.beginPath(); ctx.arc(bP.x, bP.y, ballRadius*bP.scale, 0, Math.PI*2); ctx.fill();
+            if (appState === "HOSTING") {
+                ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0,0,canvas.width,canvas.height);
+                ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = '30px Arial';
+                ctx.fillText("ROOM CODE: " + myRoomId, 500, 400);
+                return;
             }
 
-            ctx.fillStyle = 'white'; ctx.textAlign = 'left'; ctx.font = '18px Arial';
-            ctx.fillText(`GAMES: ${p1Games}-${p2Games} | SCORE: ${p1Points*15}-${p2Points*15}`, 20, 40);
-            if (alertTimer > 0) { ctx.fillStyle = 'yellow'; ctx.textAlign = 'center'; ctx.font = '30px Arial'; ctx.fillText(alertMessage, 500, 300); }
+            let renderQueue = [{ type: 'net', y: canvas.height / 2 }];
+            players.forEach(p => renderQueue.push({ type: 'player', y: p.y + PADDLE_HEIGHT / 2, obj: p }));
+            if (gameState > 0) renderQueue.push({ type: 'ball', y: ballY });
+            renderQueue.sort((a, b) => a.y - b.y).forEach(item => {
+                if (item.type === 'net') drawNet();
+                else if (item.type === 'player') drawPixelGuy(item.obj);
+                else if (item.type === 'ball') {
+                    let bP = project(ballX, ballY, ballZ); let sP = project(ballX, ballY, 0);
+                    ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.ellipse(sP.x, sP.y, ballRadius*sP.scale, ballRadius*0.5*sP.scale,0,0,Math.PI*2); ctx.fill();
+                    colorCircle(bP.x, bP.y, ballRadius * bP.scale, '#ccff00');
+                }
+            });
+
+            ctx.fillStyle = 'white'; ctx.font = 'bold 20px Arial'; ctx.textAlign = 'left';
+            ctx.fillText(`SCORE: ${getScoreString()}`, 20, 50);
+            if (alertTimer > 0) { ctx.fillStyle = 'yellow'; ctx.textAlign = 'center'; ctx.fillText(alertMessage, 500, 200); }
         }
+
+        function colorCircle(cX, cY, r, color) { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(cX, cY, r, 0, Math.PI * 2, true); ctx.fill(); }
+        function colorRect(x, y, w, h, color) { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); }
     </script>
 </body>
 </html>
