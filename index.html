@@ -2,57 +2,56 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>3D Pixel Tennis - Stable Build</title>
+    <title>3D Pixel Tennis - Ultimate Stable</title>
     <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { background-color: #111; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; font-family: 'Courier New', monospace; overflow: hidden; }
-        canvas { background-color: #1a4f1a; border: 4px solid #fff; box-shadow: 0 0 40px #000; image-rendering: pixelated; }
-        #ui { position: absolute; top: 10px; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; pointer-events: none; }
+        body { background: #111; color: #fff; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; margin: 0; font-family: 'Courier New', monospace; }
+        canvas { background: #1a4f1a; border: 4px solid #fff; box-shadow: 0 0 20px #000; }
+        #status-bar { position: absolute; top: 10px; background: rgba(0,0,0,0.8); padding: 8px 15px; border-radius: 4px; font-size: 14px; border: 1px solid #444; }
     </style>
 </head>
 <body>
 
-    <div id="ui">Status: Waiting for Library...</div>
+    <div id="status-bar">Initializing Network...</div>
     <canvas id="gameCanvas" width="800" height="600"></canvas>
 
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
-        const ui = document.getElementById('ui');
+        const statusEl = document.getElementById('status-bar');
 
-        // --- CORE VARIABLES ---
         let appState = "MENU";
         let peer = null;
         let conn = null;
         let isHost = false;
-        let myRoomCode = "";
+        let roomCode = "";
 
         // Game Objects
-        let ball = { x: 400, y: 300, vx: 3, vy: 3 };
-        let p1 = { x: 350, y: 550, w: 100, h: 15, color: '#00f' }; // Bottom
-        let p2 = { x: 350, y: 35, w: 100, h: 15, color: '#f00' };  // Top
+        let ball = { x: 400, y: 300, vx: 4, vy: 4 };
+        let p1 = { x: 350, y: 550, w: 100, h: 15, color: '#00f' };
+        let p2 = { x: 350, y: 35, w: 100, h: 15, color: '#f00' };
         let keys = {};
-        let remoteInputs = { left: false, right: false };
+        let remoteKeys = { left: false, right: false };
 
-        // PeerJS Configuration (Helps bypass firewall issues)
-        const peerConfig = {
+        // --- NETWORKING CONFIG ---
+        const config = {
+            debug: 3, // Logic logging in F12 console
             config: {
                 'iceServers': [
-                    { url: 'stun:stun.l.google.com:19302' },
-                    { url: 'stun:stun1.l.google.com:19302' }
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' }
                 ]
             }
         };
 
-        // --- INITIALIZATION ---
-        function checkLibrary() {
+        function checkLib() {
             if (window.Peer) {
-                ui.innerText = "Status: Ready. Press [3] to Host or [4] to Join.";
+                statusEl.innerText = "Ready: Press [3] to Host, [4] to Join";
             } else {
-                setTimeout(checkLibrary, 500);
+                setTimeout(checkLib, 500);
             }
         }
-        checkLibrary();
+        checkLib();
 
         window.addEventListener("keydown", e => {
             keys[e.code] = true;
@@ -63,114 +62,114 @@
         });
         window.addEventListener("keyup", e => keys[e.code] = false);
 
-        // --- NETWORKING ---
+        // --- HOSTING ---
         function startHosting() {
-            if (!window.Peer) return;
             appState = "HOSTING";
-            myRoomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+            roomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
             
-            peer = new window.Peer("tennis-" + myRoomCode, peerConfig);
-            
-            peer.on('open', () => { ui.innerText = "Room Code: " + myRoomCode; });
+            // Generate Peer with explicit ID
+            peer = new Peer(roomCode, config);
+
+            peer.on('open', id => {
+                console.log("Room Opened. ID:", id);
+                statusEl.innerText = "ROOM CODE: " + id + " - Waiting for Player 2...";
+            });
+
             peer.on('connection', c => {
                 conn = c;
                 conn.on('open', () => {
-                    appState = "PLAY";
                     isHost = true;
-                    ui.innerText = "Connected! Playing as Host.";
-                    conn.on('data', data => { if(data.type === 'input') remoteInputs = data.inputs; });
+                    appState = "PLAY";
+                    statusEl.innerText = "CONNECTED - Playing as Host";
+                    conn.on('data', data => { if(data.type === 'input') remoteKeys = data.keys; });
                 });
             });
-            peer.on('error', err => { alert("Error: " + err.type); location.reload(); });
+
+            peer.on('error', err => {
+                console.error("PeerJS Error:", err.type);
+                statusEl.innerText = "Error: " + err.type + ". Refreshing...";
+                setTimeout(() => location.reload(), 2000);
+            });
         }
 
+        // --- JOINING ---
         function joinGame() {
-            if (!window.Peer) return;
-            let code = prompt("Enter Room Code:").toUpperCase();
+            let code = prompt("Enter 4-Letter Code:").toUpperCase();
             if (!code) return;
 
             appState = "CONNECTING";
-            ui.innerText = "Connecting to " + code + "...";
-            peer = new window.Peer(peerConfig);
-            
+            statusEl.innerText = "Connecting to " + code + "...";
+            peer = new Peer(config);
+
             peer.on('open', () => {
-                conn = peer.connect("tennis-" + code);
+                conn = peer.connect(code, { reliable: true });
                 conn.on('open', () => {
-                    appState = "PLAY";
                     isHost = false;
-                    ui.innerText = "Connected! Playing as Client.";
+                    appState = "PLAY";
+                    statusEl.innerText = "CONNECTED - Playing as Client";
                     conn.on('data', data => {
                         if (data.type === 'sync') {
                             ball = data.ball;
-                            p1.x = data.p1x;
-                            p2.x = data.p2x;
+                            p1.x = data.p1;
+                            p2.x = data.p2;
                         }
                     });
                 });
             });
-            peer.on('error', err => { alert("Connection Failed. Check Code."); location.reload(); });
+
+            peer.on('error', err => {
+                alert("Could not connect. Check the code.");
+                location.reload();
+            });
         }
 
-        // --- MAIN LOOP ---
+        // --- GAME LOOP ---
         function update() {
             ctx.fillStyle = '#1a4f1a';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             if (appState === "MENU") {
-                drawText("PIXEL TENNIS ONLINE", 400, 280, "30px", "#fff");
-                drawText("3: HOST | 4: JOIN", 400, 330, "20px", "#ccc");
+                drawText("3D PIXEL TENNIS", 400, 280, "40px", "#fff");
+                drawText("Press 3 to Host | Press 4 to Join", 400, 340, "18px", "#aaa");
             } 
             else if (appState === "PLAY") {
                 if (isHost) {
-                    // Host Controls (Bottom Player)
-                    if (keys['KeyA'] || keys['ArrowLeft']) p1.x -= 6;
-                    if (keys['KeyD'] || keys['ArrowRight']) p1.x += 6;
-                    
-                    // Client Controls (Remote Top Player)
-                    if (remoteInputs.left) p2.x -= 6;
-                    if (remoteInputs.right) p2.x += 6;
+                    // Host handles physics
+                    if (keys['KeyA'] || keys['ArrowLeft']) p1.x -= 7;
+                    if (keys['KeyD'] || keys['ArrowRight']) p1.x += 7;
+                    if (remoteKeys.left) p2.x -= 7;
+                    if (remoteKeys.right) p2.x += 7;
 
-                    // Ball Logic (Host Only)
-                    ball.x += ball.vx;
-                    ball.y += ball.vy;
-
-                    // Walls
+                    ball.x += ball.vx; ball.y += ball.vy;
                     if (ball.x < 0 || ball.x > 800) ball.vx *= -1;
-                    // Paddles
                     if (ball.y > 540 && ball.x > p1.x && ball.x < p1.x + 100) ball.vy *= -1;
                     if (ball.y < 50 && ball.x > p2.x && ball.x < p2.x + 100) ball.vy *= -1;
-                    // Out of bounds
                     if (ball.y < 0 || ball.y > 600) { ball.x = 400; ball.y = 300; }
 
-                    // Sync to Client
                     if (conn && conn.open) {
-                        conn.send({ type: 'sync', ball: ball, p1x: p1.x, p2x: p2.x });
+                        conn.send({ type: 'sync', ball: ball, p1: p1.x, p2: p2.x });
                     }
                 } else {
-                    // Client sends keys to Host
+                    // Client sends inputs
                     if (conn && conn.open) {
-                        conn.send({ 
-                            type: 'input', 
-                            inputs: { 
-                                left: keys['KeyA'] || keys['ArrowLeft'], 
-                                right: keys['KeyD'] || keys['ArrowRight'] 
-                            } 
-                        });
+                        conn.send({ type: 'input', keys: {
+                            left: keys['KeyA'] || keys['ArrowLeft'],
+                            right: keys['KeyD'] || keys['ArrowRight']
+                        }});
                     }
                 }
 
-                // Render
-                ctx.fillStyle = 'yellow';
-                ctx.beginPath(); ctx.arc(ball.x, ball.y, 8, 0, Math.PI*2); ctx.fill();
+                // Draw paddles and ball
                 ctx.fillStyle = p1.color; ctx.fillRect(p1.x, p1.y, p1.w, p1.h);
                 ctx.fillStyle = p2.color; ctx.fillRect(p2.x, p2.y, p2.w, p2.h);
+                ctx.fillStyle = 'yellow'; ctx.beginPath(); ctx.arc(ball.x, ball.y, 10, 0, Math.PI*2); ctx.fill();
             }
 
             requestAnimationFrame(update);
         }
 
         function drawText(t, x, y, s, c) {
-            ctx.fillStyle = c; ctx.font = s + " 'Courier New'"; ctx.textAlign = "center";
+            ctx.fillStyle = c; ctx.font = "bold " + s + " 'Courier New'"; ctx.textAlign = "center";
             ctx.fillText(t, x, y);
         }
 
