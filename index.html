@@ -2,56 +2,45 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>3D Pixel Tennis - Ultimate Stable</title>
-    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <title>Pixel Tennis Online</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { background: #111; color: #fff; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; margin: 0; font-family: 'Courier New', monospace; }
-        canvas { background: #1a4f1a; border: 4px solid #fff; box-shadow: 0 0 20px #000; }
-        #status-bar { position: absolute; top: 10px; background: rgba(0,0,0,0.8); padding: 8px 15px; border-radius: 4px; font-size: 14px; border: 1px solid #444; }
+        body { background: #111; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; font-family: sans-serif; }
+        canvas { background: #1a4f1a; border: 4px solid #fff; }
+        #status { position: absolute; top: 10px; background: rgba(0,0,0,0.8); padding: 10px; border-radius: 5px; }
     </style>
 </head>
 <body>
 
-    <div id="status-bar">Initializing Network...</div>
+    <div id="status">Loading PeerJS...</div>
     <canvas id="gameCanvas" width="800" height="600"></canvas>
 
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
-        const statusEl = document.getElementById('status-bar');
+        const statusEl = document.getElementById('status');
 
         let appState = "MENU";
         let peer = null;
         let conn = null;
         let isHost = false;
-        let roomCode = "";
-
+        
         // Game Objects
         let ball = { x: 400, y: 300, vx: 4, vy: 4 };
-        let p1 = { x: 350, y: 550, w: 100, h: 15, color: '#00f' };
-        let p2 = { x: 350, y: 35, w: 100, h: 15, color: '#f00' };
+        let p1 = { x: 350, y: 550, w: 100, h: 15 };
+        let p2 = { x: 350, y: 35, w: 100, h: 15 };
         let keys = {};
         let remoteKeys = { left: false, right: false };
 
-        // --- NETWORKING CONFIG ---
-        const config = {
-            debug: 3, // Logic logging in F12 console
-            config: {
-                'iceServers': [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' }
-                ]
-            }
-        };
-
-        function checkLib() {
+        // Wait for PeerJS to load
+        function init() {
             if (window.Peer) {
-                statusEl.innerText = "Ready: Press [3] to Host, [4] to Join";
+                statusEl.innerText = "Ready! [3] Host | [4] Join";
             } else {
-                setTimeout(checkLib, 500);
+                setTimeout(init, 500);
             }
         }
-        checkLib();
+        init();
 
         window.addEventListener("keydown", e => {
             keys[e.code] = true;
@@ -62,117 +51,67 @@
         });
         window.addEventListener("keyup", e => keys[e.code] = false);
 
-        // --- HOSTING ---
         function startHosting() {
             appState = "HOSTING";
-            roomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+            const code = Math.random().toString(36).substring(2, 6).toUpperCase();
+            peer = new Peer("TENNIS-" + code);
             
-            // Generate Peer with explicit ID
-            peer = new Peer(roomCode, config);
-
-            peer.on('open', id => {
-                console.log("Room Opened. ID:", id);
-                statusEl.innerText = "ROOM CODE: " + id + " - Waiting for Player 2...";
-            });
-
+            peer.on('open', id => { statusEl.innerText = "CODE: " + code; });
             peer.on('connection', c => {
                 conn = c;
                 conn.on('open', () => {
-                    isHost = true;
-                    appState = "PLAY";
-                    statusEl.innerText = "CONNECTED - Playing as Host";
-                    conn.on('data', data => { if(data.type === 'input') remoteKeys = data.keys; });
+                    isHost = true; appState = "PLAY";
+                    statusEl.innerText = "Playing as HOST";
+                    conn.on('data', d => { if(d.type==='keys') remoteKeys = d.keys; });
                 });
-            });
-
-            peer.on('error', err => {
-                console.error("PeerJS Error:", err.type);
-                statusEl.innerText = "Error: " + err.type + ". Refreshing...";
-                setTimeout(() => location.reload(), 2000);
             });
         }
 
-        // --- JOINING ---
         function joinGame() {
-            let code = prompt("Enter 4-Letter Code:").toUpperCase();
-            if (!code) return;
-
+            let input = prompt("Enter Code:");
+            if (!input) return; // FIX: Prevents the 'toUpperCase' crash
+            
+            let code = "TENNIS-" + input.toUpperCase();
             appState = "CONNECTING";
-            statusEl.innerText = "Connecting to " + code + "...";
-            peer = new Peer(config);
-
+            statusEl.innerText = "Connecting...";
+            
+            peer = new Peer();
             peer.on('open', () => {
-                conn = peer.connect(code, { reliable: true });
+                conn = peer.connect(code);
                 conn.on('open', () => {
-                    isHost = false;
-                    appState = "PLAY";
-                    statusEl.innerText = "CONNECTED - Playing as Client";
-                    conn.on('data', data => {
-                        if (data.type === 'sync') {
-                            ball = data.ball;
-                            p1.x = data.p1;
-                            p2.x = data.p2;
-                        }
-                    });
+                    isHost = false; appState = "PLAY";
+                    statusEl.innerText = "Playing as CLIENT";
+                    conn.on('data', d => { if(d.type==='sync') { ball=d.b; p1.x=d.p1; p2.x=d.p2; }});
                 });
-            });
-
-            peer.on('error', err => {
-                alert("Could not connect. Check the code.");
-                location.reload();
             });
         }
 
-        // --- GAME LOOP ---
         function update() {
             ctx.fillStyle = '#1a4f1a';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillRect(0, 0, 800, 600);
 
             if (appState === "MENU") {
-                drawText("3D PIXEL TENNIS", 400, 280, "40px", "#fff");
-                drawText("Press 3 to Host | Press 4 to Join", 400, 340, "18px", "#aaa");
-            } 
-            else if (appState === "PLAY") {
+                ctx.fillStyle = "white"; ctx.textAlign = "center"; ctx.font = "30px Arial";
+                ctx.fillText("PIXEL TENNIS", 400, 300);
+            } else if (appState === "PLAY") {
                 if (isHost) {
-                    // Host handles physics
-                    if (keys['KeyA'] || keys['ArrowLeft']) p1.x -= 7;
-                    if (keys['KeyD'] || keys['ArrowRight']) p1.x += 7;
-                    if (remoteKeys.left) p2.x -= 7;
-                    if (remoteKeys.right) p2.x += 7;
-
+                    if (keys['ArrowLeft']) p1.x -= 7; if (keys['ArrowRight']) p1.x += 7;
+                    if (remoteKeys.left) p2.x -= 7; if (remoteKeys.right) p2.x += 7;
                     ball.x += ball.vx; ball.y += ball.vy;
                     if (ball.x < 0 || ball.x > 800) ball.vx *= -1;
                     if (ball.y > 540 && ball.x > p1.x && ball.x < p1.x + 100) ball.vy *= -1;
                     if (ball.y < 50 && ball.x > p2.x && ball.x < p2.x + 100) ball.vy *= -1;
                     if (ball.y < 0 || ball.y > 600) { ball.x = 400; ball.y = 300; }
-
-                    if (conn && conn.open) {
-                        conn.send({ type: 'sync', ball: ball, p1: p1.x, p2: p2.x });
-                    }
+                    if (conn && conn.open) conn.send({type:'sync', b:ball, p1:p1.x, p2:p2.x});
                 } else {
-                    // Client sends inputs
-                    if (conn && conn.open) {
-                        conn.send({ type: 'input', keys: {
-                            left: keys['KeyA'] || keys['ArrowLeft'],
-                            right: keys['KeyD'] || keys['ArrowRight']
-                        }});
-                    }
+                    if (conn && conn.open) conn.send({type:'keys', keys:{left:keys['ArrowLeft'], right:keys['ArrowRight']}});
                 }
-
-                // Draw paddles and ball
-                ctx.fillStyle = p1.color; ctx.fillRect(p1.x, p1.y, p1.w, p1.h);
-                ctx.fillStyle = p2.color; ctx.fillRect(p2.x, p2.y, p2.w, p2.h);
-                ctx.fillStyle = 'yellow'; ctx.beginPath(); ctx.arc(ball.x, ball.y, 10, 0, Math.PI*2); ctx.fill();
+                ctx.fillStyle = "blue"; ctx.fillRect(p1.x, p1.y, p1.w, p1.h);
+                ctx.fillStyle = "red"; ctx.fillRect(p2.x, p2.y, p2.w, p2.h);
+                ctx.fillStyle = "yellow"; ctx.beginPath(); ctx.arc(ball.x, ball.y, 8, 0, Math.PI*2); ctx.fill();
             }
-
             requestAnimationFrame(update);
         }
-
-        function drawText(t, x, y, s, c) {
-            ctx.fillStyle = c; ctx.font = "bold " + s + " 'Courier New'"; ctx.textAlign = "center";
-            ctx.fillText(t, x, y);
-        }
-
         update();
     </script>
 </body>
