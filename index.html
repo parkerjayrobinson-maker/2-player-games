@@ -120,7 +120,17 @@
             for(let i=0; i<4; i++) shortId += chars.charAt(Math.floor(Math.random() * chars.length));
             myRoomId = shortId;
 
-            peer = new Peer("tennis-" + myRoomId); 
+            // Updated with STUN configuration for internet matchmaking
+            peer = new Peer("tennis-" + myRoomId, {
+                config: {
+                    'iceServers': [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' }
+                    ]
+                }
+            }); 
+            
             peer.on('connection', (connection) => {
                 conn = connection;
                 conn.on('open', () => {
@@ -137,7 +147,18 @@
             if (!roomCode) return;
             appState = "CONNECTING";
             isClient = true;
-            peer = new Peer(); 
+            
+            // Updated with STUN configuration for internet matchmaking
+            peer = new Peer({
+                config: {
+                    'iceServers': [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' }
+                    ]
+                }
+            }); 
+
             peer.on('open', (id) => {
                 conn = peer.connect("tennis-" + roomCode.toUpperCase());
                 conn.on('open', () => startGame(5));
