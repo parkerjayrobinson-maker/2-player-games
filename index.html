@@ -53,7 +53,7 @@
         let conn = null;
         let isHost = false;
         let isClient = false;
-        let myRoomId = "Connecting to Broker...";
+        let myRoomId = "Generating Code...";
         let clientKeys = { left: false, right: false, up: false, down: false, swing: false }; 
 
         // Game Variables
@@ -109,16 +109,19 @@
             keys[e.code] = false;
         });
 
-        // --- WEBRTC NETWORKING (REWRITTEN STABLE IMPLEMENTATION) ---
+        // --- WEBRTC NETWORKING (STABLE DIRECT-HANDSHAKE METHOD) ---
 
         function startHosting() {
             appState = "HOSTING";
             isHost = true;
             isClient = false;
-            myRoomId = "Fetching clean room code...";
+            
+            // Generate a clean 5-digit unique room number string
+            let roomNum = Math.floor(10000 + Math.random() * 90000).toString();
+            myRoomId = roomNum;
 
-            // Let the cloud broker safely assign a perfect global unique random text ID
-            peer = new Peer({
+            // Direct mapping bypasses discovery endpoints completely
+            peer = new Peer("tennis-room-" + myRoomId, {
                 config: {
                     'iceServers': [
                         { urls: 'stun:stun.l.google.com:19302' },
@@ -127,16 +130,10 @@
                 }
             }); 
 
-            peer.on('open', (id) => {
-                // Safely shorten the unique assigned ID to make it clean to manually share
-                myRoomId = id.toString().slice(0, 5).toUpperCase();
-            });
-
             peer.on('connection', (connection) => {
                 conn = connection;
                 
                 conn.on('open', () => {
-                    // Initialize variables and switch state safely
                     setupPlayers();
                     resetPoint();
                     appState = "PLAY";
@@ -151,14 +148,15 @@
             });
 
             peer.on('error', (err) => {
-                alert("Hosting connectivity error: " + err.type);
+                alert("Hosting error [" + err.type + "]. Returning to menu.");
                 appState = "MENU";
             });
         }
 
         function joinGame() {
-            let roomCode = prompt("Enter the Room Code visible on the Host's screen:");
-            if (!roomCode) return;
+            let roomCode = prompt("Enter the 5-digit Room Code from the Host:");
+            if (!roomCode || roomCode.trim() === "") return;
+            
             appState = "CONNECTING";
             isClient = true;
 
@@ -172,40 +170,31 @@
             }); 
 
             peer.on('open', (id) => {
-                // Find all existing peer IDs on the cloud cluster to match the short user handle
-                peer.listAllPeers((peers) => {
-                    let targetPeerId = peers.find(p => p.toUpperCase().startsWith(roomCode.trim().toUpperCase()));
-                    
-                    if (!targetPeerId) {
-                        // Fallback connection string attempt if discovery list is rate-restricted
-                        targetPeerId = roomCode.trim().toLowerCase();
+                // Instantly connect to the clean text string representation directly
+                conn = peer.connect("tennis-room-" + roomCode.trim());
+                
+                conn.on('open', () => {
+                    setupPlayers();
+                    resetPoint();
+                    appState = "PLAY";
+                    gameMode = 5;
+                });
+
+                conn.on('data', (data) => {
+                    if (data.type === 'sync' && appState === "PLAY") {
+                        ballX = data.state.bX; ballY = data.state.bY; ballZ = data.state.bZ;
+                        
+                        if (players.length < 2) setupPlayers();
+
+                        players[0].x = data.state.p1X; players[0].y = data.state.p1Y; players[0].swingTimer = data.state.p1S;
+                        players[1].x = data.state.p2X; players[1].y = data.state.p2Y;
+                        if (!players[1].swingTimer) players[1].swingTimer = data.state.p2S; 
+                        
+                        p1Points = data.state.s1; p2Points = data.state.s2;
+                        p1Games = data.state.g1; p2Games = data.state.g2;
+                        gameState = data.state.gs; server = data.state.sv;
+                        alertMessage = data.state.msg; alertTimer = data.state.msgT;
                     }
-
-                    conn = peer.connect(targetPeerId);
-                    
-                    conn.on('open', () => {
-                        setupPlayers();
-                        resetPoint();
-                        appState = "PLAY";
-                        gameMode = 5;
-                    });
-
-                    conn.on('data', (data) => {
-                        if (data.type === 'sync') {
-                            ballX = data.state.bX; ballY = data.state.bY; ballZ = data.state.bZ;
-                            
-                            if (players.length < 2) setupPlayers();
-
-                            players[0].x = data.state.p1X; players[0].y = data.state.p1Y; players[0].swingTimer = data.state.p1S;
-                            players[1].x = data.state.p2X; players[1].y = data.state.p2Y;
-                            if (!players[1].swingTimer) players[1].swingTimer = data.state.p2S; 
-                            
-                            p1Points = data.state.s1; p2Points = data.state.s2;
-                            p1Games = data.state.g1; p2Games = data.state.g2;
-                            gameState = data.state.gs; server = data.state.sv;
-                            alertMessage = data.state.msg; alertTimer = data.state.msgT;
-                        }
-                    });
                 });
             });
 
@@ -245,7 +234,7 @@
             }
         }
 
-        // --- GAME ENGINE LOOP ---
+        // --- CORE TICK CLOCK ---
         setInterval(() => {
             if (appState === "PLAY") {
                 if (!isClient) moveEverything();
@@ -438,7 +427,7 @@
             });
         }
 
-        // --- GRAPHICS RENDER ---
+        // --- GRAPHICS GRAPHICS ---
 
         function project(x, y, z = 0) {
             let pct = y / canvas.height; 
@@ -521,7 +510,7 @@
             if (appState === "CONNECTING") {
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = '22px Arial';
-                ctx.fillText("Connecting and discovering room across cluster...", 500, 400);
+                ctx.fillText("Connecting directly to secure endpoint string...", 500, 400);
                 return;
             }
 
