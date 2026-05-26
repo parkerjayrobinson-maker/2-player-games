@@ -118,14 +118,15 @@
             let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
             let shortId = "";
             for(let i=0; i<4; i++) shortId += chars.charAt(Math.floor(Math.random() * chars.length));
-            myRoomId = shortId;
+            myRoomId = shortId.toUpperCase(); // Force absolute upper-case matchability
 
             peer = new Peer("tennis-" + myRoomId, {
                 config: {
                     'iceServers': [
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' }
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' }
                     ]
                 }
             }); 
@@ -133,12 +134,12 @@
             peer.on('connection', (connection) => {
                 conn = connection;
                 conn.on('open', () => {
+                    // Pre-initialize structure before sync packets propagate
+                    startGame(4);
+                    
                     conn.on('data', (data) => {
                         if (data.type === 'keys') {
                             clientKeys = data.keys; 
-                        } else if (data.type === 'client_ready') {
-                            // Only start the game loop once the client explicitly states it is ready
-                            startGame(4);
                         }
                     });
                 });
@@ -156,28 +157,31 @@
                     'iceServers': [
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' }
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' }
                     ]
                 }
             }); 
 
             peer.on('open', (id) => {
                 conn = peer.connect("tennis-" + roomCode.toUpperCase());
+                
                 conn.on('open', () => {
                     startGame(5);
-                    // Inform the host that we have successfully configured our window and data channels
-                    conn.send({ type: 'client_ready' });
                 });
+
                 conn.on('data', (data) => {
-                    if (data.type === 'sync') {
-                        ballX = data.state.bX; ballY = data.state.bY; ballZ = data.state.bZ;
+                    if (data.type === 'sync' && appState === "PLAY") {
+                        // Prevent unpacking empty arrays or broken frame payloads
+                        if (!data.state || !data.state.hasPlayers) return;
                         
-                        // Safeguard: initialize player items dynamically if client catches a frame too early
                         if (players.length < 2) setupPlayers();
 
+                        ballX = data.state.bX; ballY = data.state.bY; ballZ = data.state.bZ;
                         players[0].x = data.state.p1X; players[0].y = data.state.p1Y; players[0].swingTimer = data.state.p1S;
                         players[1].x = data.state.p2X; players[1].y = data.state.p2Y;
                         if (!players[1].swingTimer) players[1].swingTimer = data.state.p2S; 
+                        
                         p1Points = data.state.s1; p2Points = data.state.s2;
                         p1Games = data.state.g1; p2Games = data.state.g2;
                         gameState = data.state.gs; server = data.state.sv;
@@ -188,10 +192,11 @@
         }
 
         function syncToClient() {
-            if (isHost && conn && conn.open) {
+            if (isHost && conn && conn.open && players.length >= 2) {
                 conn.send({
                     type: 'sync',
                     state: {
+                        hasPlayers: true,
                         bX: ballX, bY: ballY, bZ: ballZ,
                         p1X: players[0].x, p1Y: players[0].y, p1S: players[0].swingTimer,
                         p2X: players[1].x, p2Y: players[1].y, p2S: players[1].swingTimer,
@@ -217,6 +222,17 @@
             }
         }
 
+        // --- MAIN ENGINE HEARTBEAT ---
+        // Safely separating logic execution states from active network state
+        setInterval(() => {
+            if (appState === "PLAY") {
+                if (!isClient) moveEverything();
+                if (isHost) syncToClient();
+                if (isClient) sendKeysToHost();
+            }
+            drawEverything();
+        }, 1000 / framesPerSecond);
+
         // --- GAME LOGIC ---
 
         function startGame(mode) {
@@ -224,9 +240,9 @@
             gameMode = mode;
             p1Points = p2Points = p1Games = p2Games = 0;
             server = 1;
-            appState = "PLAY";
             setupPlayers();
             resetPoint();
+            appState = "PLAY"; // Shift to play state only after structures are fully defined
         }
 
         function setupPlayers() {
@@ -258,15 +274,6 @@
             }
         }
 
-        setInterval(() => {
-            if (appState === "PLAY") {
-                if (!isClient) moveEverything();
-                if (isHost) syncToClient();
-                if (isClient) sendKeysToHost();
-            }
-            drawEverything();
-        }, 1000 / framesPerSecond);
-
         function showAlert(msg) { alertMessage = msg; alertTimer = 120; }
 
         function resetPoint() {
@@ -274,9 +281,10 @@
             gameState = 0; rallies = 0; ballSpeedX = 0; ballSpeedY = 0; ballZ = 0;
             if (faults === 0) showAlert(server === 1 ? "BOTTOM SERVES" : "TOP SERVES");
             
-            // Return to baseline
-            players[0].y = canvas.height - MARGIN_Y - PADDLE_HEIGHT - 20;
-            players[1].y = MARGIN_Y + 20;
+            if (players.length >= 2) {
+                players[0].y = canvas.height - MARGIN_Y - PADDLE_HEIGHT - 20;
+                players[1].y = MARGIN_Y + 20;
+            }
         }
 
         function handleFault() {
@@ -300,6 +308,7 @@
 
         function resetGame() { p1Points = 0; p2Points = 0; server = server === 1 ? 2 : 1; resetPoint(); }
 
+        // Same score calculation strings
         function getScoreString() {
             if (p1Points >= 3 && p2Points >= 3) {
                 if (p1Points === p2Points) return "Deuce";
@@ -311,6 +320,7 @@
 
         function moveEverything() {
             if (alertTimer > 0) alertTimer--;
+            if (players.length < 2) return;
 
             players.forEach(p => {
                 if (p.swingTimer > 0) p.swingTimer--;
@@ -407,6 +417,8 @@
             });
         }
 
+        // --- GRAPHICS ENGINE RENDERING ---
+
         function project(x, y, z = 0) {
             let pct = y / canvas.height; 
             let scale = 0.35 + (0.65 * pct); 
@@ -482,6 +494,13 @@
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = '30px Arial';
                 ctx.fillText("ROOM CODE: " + myRoomId, 500, 400);
+                return;
+            }
+
+            if (appState === "CONNECTING") {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = '24px Arial';
+                ctx.fillText("Connecting to Peer...", 500, 400);
                 return;
             }
 
