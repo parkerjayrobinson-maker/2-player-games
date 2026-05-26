@@ -120,7 +120,6 @@
             for(let i=0; i<4; i++) shortId += chars.charAt(Math.floor(Math.random() * chars.length));
             myRoomId = shortId;
 
-            // Updated with STUN configuration for internet matchmaking
             peer = new Peer("tennis-" + myRoomId, {
                 config: {
                     'iceServers': [
@@ -130,14 +129,18 @@
                     ]
                 }
             }); 
-            
+
             peer.on('connection', (connection) => {
                 conn = connection;
                 conn.on('open', () => {
                     conn.on('data', (data) => {
-                        if (data.type === 'keys') clientKeys = data.keys; 
+                        if (data.type === 'keys') {
+                            clientKeys = data.keys; 
+                        } else if (data.type === 'client_ready') {
+                            // Only start the game loop once the client explicitly states it is ready
+                            startGame(4);
+                        }
                     });
-                    startGame(4);
                 });
             });
         }
@@ -147,8 +150,7 @@
             if (!roomCode) return;
             appState = "CONNECTING";
             isClient = true;
-            
-            // Updated with STUN configuration for internet matchmaking
+
             peer = new Peer({
                 config: {
                     'iceServers': [
@@ -161,10 +163,18 @@
 
             peer.on('open', (id) => {
                 conn = peer.connect("tennis-" + roomCode.toUpperCase());
-                conn.on('open', () => startGame(5));
+                conn.on('open', () => {
+                    startGame(5);
+                    // Inform the host that we have successfully configured our window and data channels
+                    conn.send({ type: 'client_ready' });
+                });
                 conn.on('data', (data) => {
                     if (data.type === 'sync') {
                         ballX = data.state.bX; ballY = data.state.bY; ballZ = data.state.bZ;
+                        
+                        // Safeguard: initialize player items dynamically if client catches a frame too early
+                        if (players.length < 2) setupPlayers();
+
                         players[0].x = data.state.p1X; players[0].y = data.state.p1Y; players[0].swingTimer = data.state.p1S;
                         players[1].x = data.state.p2X; players[1].y = data.state.p2Y;
                         if (!players[1].swingTimer) players[1].swingTimer = data.state.p2S; 
@@ -320,7 +330,6 @@
                         let speed = PADDLE_SPEED * 1.5; 
                         if (ballSpeedY < 0) { 
                             let targetX = ballX - PADDLE_WIDTH / 2;
-                            // AI only tracks horizontally
                             if (p.x < targetX - 2) p.x += speed;
                             if (p.x > targetX + 2) p.x -= speed;
                         } else {
@@ -329,10 +338,9 @@
                             if (p.x > targetX + 5) p.x -= speed * 0.5;
                         }
                         
-                        // AI restricted to court lines
                         if (p.x < MARGIN_X) p.x = MARGIN_X;
                         if (p.x > canvas.width - MARGIN_X - PADDLE_WIDTH) p.x = canvas.width - MARGIN_X - PADDLE_WIDTH;
-                        p.y = MARGIN_Y + 20; // Lock AI vertical position
+                        p.y = MARGIN_Y + 20; 
                     }
                 } else {
                     let moveLeft = keys[p.controls.left], moveRight = keys[p.controls.right],
