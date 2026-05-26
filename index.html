@@ -2,8 +2,8 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>3D Perspective Pixel Tennis (WebRTC)</title>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <title>3D Perspective Pixel Tennis (PubNub Relay)</title>
+    <script src="https://cdn.pubnub.com/sdk/javascript/pubnub.7.2.2.min.js"></script>
     <style>
         body {
             background-color: #111;
@@ -43,17 +43,19 @@
         const MARGIN_X = 220; 
         const MARGIN_Y = 100;
 
+        // --- GLOBAL MULTIPLAYER BROKER KEYSETS ---
+        // A free sandbox tier key setup to instantly process high-frequency game packets
+        let pubnub = null;
+
         // --- APP & MULTIPLAYER STATE ---
         let appState = "MENU"; 
         let gameMode = 1; 
         let resetTimeout = null; 
         
-        // WebRTC Variables
-        let peer = null;
-        let conn = null;
+        // Network state variables
         let isHost = false;
         let isClient = false;
-        let myRoomId = "Generating Code...";
+        let myRoomId = "";
         let clientKeys = { left: false, right: false, up: false, down: false, swing: false }; 
 
         // Game Variables
@@ -109,132 +111,121 @@
             keys[e.code] = false;
         });
 
-        // --- WEBRTC NETWORKING (STABLE DIRECT-HANDSHAKE METHOD) ---
+        // --- RELAY MULTIPLAYER NETWORK LOGIC (PUBNUB SAFEMODE) ---
+
+        function initPubNub() {
+            if (!pubnub) {
+                pubnub = new PubNub({
+                    publishKey: "pub-c-493bfa69-90d5-45be-8947-f4728f3bdf1d",
+                    subscribeKey: "sub-c-4d76939f-f529-4fc3-bc8d-fae60e0a514d",
+                    userId: "user-" + Math.floor(Math.random() * 10000)
+                });
+            }
+        }
 
         function startHosting() {
+            initPubNub();
             appState = "HOSTING";
             isHost = true;
             isClient = false;
             
-            // Generate a clean 5-digit unique room number string
-            let roomNum = Math.floor(10000 + Math.random() * 90000).toString();
-            myRoomId = roomNum;
+            // Generate a secure custom 5-character string handle
+            let chars = "123456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+            myRoomId = "";
+            for(let i=0; i<5; i++) myRoomId += chars.charAt(Math.floor(Math.random() * chars.length));
 
-            // Direct mapping bypasses discovery endpoints completely
-            peer = new Peer("tennis-room-" + myRoomId, {
-                config: {
-                    'iceServers': [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' }
-                    ]
+            pubnub.addListener({
+                message: function(event) {
+                    if (event.message.type === 'clientInput') {
+                        clientKeys = event.message.keys;
+                    }
                 }
-            }); 
-
-            peer.on('connection', (connection) => {
-                conn = connection;
-                
-                conn.on('open', () => {
-                    setupPlayers();
-                    resetPoint();
-                    appState = "PLAY";
-                    gameMode = 4;
-                    
-                    conn.on('data', (data) => {
-                        if (data.type === 'keys') {
-                            clientKeys = data.keys; 
-                        }
-                    });
-                });
             });
 
-            peer.on('error', (err) => {
-                alert("Hosting error [" + err.type + "]. Returning to menu.");
-                appState = "MENU";
-            });
+            pubnub.subscribe({ channels: ["tennis-room-" + myRoomId] });
+
+            // Ready host mode
+            setupPlayers();
+            resetPoint();
+            appState = "PLAY";
+            gameMode = 4;
         }
 
         function joinGame() {
-            let roomCode = prompt("Enter the 5-digit Room Code from the Host:");
+            let roomCode = prompt("Enter the 5-Character Room Code from the Host:");
             if (!roomCode || roomCode.trim() === "") return;
             
+            initPubNub();
+            myRoomId = roomCode.trim().toUpperCase();
             appState = "CONNECTING";
             isClient = true;
 
-            peer = new Peer({
-                config: {
-                    'iceServers': [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' }
-                    ]
-                }
-            }); 
-
-            peer.on('open', (id) => {
-                // Instantly connect to the clean text string representation directly
-                conn = peer.connect("tennis-room-" + roomCode.trim());
-                
-                conn.on('open', () => {
-                    setupPlayers();
-                    resetPoint();
-                    appState = "PLAY";
-                    gameMode = 5;
-                });
-
-                conn.on('data', (data) => {
-                    if (data.type === 'sync' && appState === "PLAY") {
-                        ballX = data.state.bX; ballY = data.state.bY; ballZ = data.state.bZ;
+            pubnub.addListener({
+                message: function(event) {
+                    if (event.message.type === 'hostSync') {
+                        let state = event.message.state;
+                        ballX = state.bX; ballY = state.bY; ballZ = state.bZ;
                         
                         if (players.length < 2) setupPlayers();
 
-                        players[0].x = data.state.p1X; players[0].y = data.state.p1Y; players[0].swingTimer = data.state.p1S;
-                        players[1].x = data.state.p2X; players[1].y = data.state.p2Y;
-                        if (!players[1].swingTimer) players[1].swingTimer = data.state.p2S; 
+                        players[0].x = state.p1X; players[0].y = state.p1Y; players[0].swingTimer = state.p1S;
+                        players[1].x = state.p2X; players[1].y = state.p2Y;
+                        if (!players[1].swingTimer) players[1].swingTimer = state.p2S; 
                         
-                        p1Points = data.state.s1; p2Points = data.state.s2;
-                        p1Games = data.state.g1; p2Games = data.state.g2;
-                        gameState = data.state.gs; server = data.state.sv;
-                        alertMessage = data.state.msg; alertTimer = data.state.msgT;
+                        p1Points = state.s1; p2Points = state.s2;
+                        p1Games = state.g1; p2Games = state.g2;
+                        gameState = state.gs; server = state.sv;
+                        alertMessage = state.msg; alertTimer = state.msgT;
                     }
-                });
+                }
             });
 
-            peer.on('error', (err) => {
-                alert("Join connection error: " + err.type);
-                appState = "MENU";
-            });
+            pubnub.subscribe({ channels: ["tennis-room-" + myRoomId] });
+
+            setupPlayers();
+            resetPoint();
+            appState = "PLAY";
+            gameMode = 5;
         }
 
         function syncToClient() {
-            if (isHost && conn && conn.open && players.length >= 2) {
-                conn.send({
-                    type: 'sync',
-                    state: {
-                        bX: ballX, bY: ballY, bZ: ballZ,
-                        p1X: players[0].x, p1Y: players[0].y, p1S: players[0].swingTimer,
-                        p2X: players[1].x, p2Y: players[1].y, p2S: players[1].swingTimer,
-                        s1: p1Points, s2: p2Points, g1: p1Games, g2: p2Games,
-                        gs: gameState, sv: server, msg: alertMessage, msgT: alertTimer
+            if (isHost && pubnub && players.length >= 2) {
+                pubnub.publish({
+                    channel: "tennis-room-" + myRoomId,
+                    message: {
+                        type: 'hostSync',
+                        state: {
+                            bX: ballX, bY: ballY, bZ: ballZ,
+                            p1X: players[0].x, p1Y: players[0].y, p1S: players[0].swingTimer,
+                            p2X: players[1].x, p2Y: players[1].y, p2S: players[1].swingTimer,
+                            s1: p1Points, s2: p2Points, g1: p1Games, g2: p2Games,
+                            gs: gameState, sv: server, msg: alertMessage, msgT: alertTimer
+                        }
                     }
                 });
             }
         }
 
         function sendKeysToHost() {
-            if (isClient && conn && conn.open) {
-                conn.send({
-                    type: 'keys',
-                    keys: { 
-                        left: keys['KeyA'] || keys['ArrowLeft'], 
-                        right: keys['KeyD'] || keys['ArrowRight'], 
-                        up: keys['KeyW'] || keys['ArrowUp'],
-                        down: keys['KeyS'] || keys['ArrowDown'],
-                        swing: keys['Space'] || keys['Enter'] 
+            if (isClient && pubnub) {
+                pubnub.publish({
+                    channel: "tennis-room-" + myRoomId,
+                    sendByPost: true,
+                    message: { 
+                        type: 'clientInput',
+                        keys: {
+                            left: keys['KeyA'] || keys['ArrowLeft'], 
+                            right: keys['KeyD'] || keys['ArrowRight'], 
+                            up: keys['KeyW'] || keys['ArrowUp'],
+                            down: keys['KeyS'] || keys['ArrowDown'],
+                            swing: keys['Space'] || keys['Enter'] 
+                        }
                     }
                 });
             }
         }
 
-        // --- CORE TICK CLOCK ---
+        // --- TICK UPDATE LOOP ---
         setInterval(() => {
             if (appState === "PLAY") {
                 if (!isClient) moveEverything();
@@ -244,7 +235,7 @@
             drawEverything();
         }, 1000 / framesPerSecond);
 
-        // --- GAME LOGIC ---
+        // --- CORE GAME ENGINE LOGIC ---
 
         function startGame(mode) {
             if (resetTimeout) clearTimeout(resetTimeout);
@@ -510,7 +501,7 @@
             if (appState === "CONNECTING") {
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.font = '22px Arial';
-                ctx.fillText("Connecting directly to secure endpoint string...", 500, 400);
+                ctx.fillText("Synchronizing pipeline with relay network...", 500, 400);
                 return;
             }
 
